@@ -1,0 +1,166 @@
+# ============================================================
+# 智慧医疗大数据与 AI 大模型分析平台 —— Git 忽略规则
+# ============================================================
+
+# ------------------------------
+# 1. 数据文件（大体积医疗 CSV / 中间产物）
+# ------------------------------
+# 原始解压数据（~794 MB，210 万行）
+data_process/raw/*.csv
+data_process/raw/*.tsv
+data_process/raw/*.rar
+data_process/raw/*.zip
+data_process/raw/*.7z
+
+# 清洗后输出数据（~817 MB）与处理报告（脚本自动生成）
+data_process/processed/*_clean.csv
+data_process/processed/processing_report.json
+
+# ------------------------------
+# 2. Python 编译产物与字节码
+# ------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# ------------------------------
+# 3. 虚拟环境
+# ------------------------------
+.venv/
+venv/
+env/
+ENV/
+.venv*/
+venv*/
+env*/
+
+# ------------------------------
+# 4. 环境变量与本地配置
+# ------------------------------
+.env
+.env.local
+.env.*.local
+# 保留模板：.env.example
+
+# ------------------------------
+# 5. 测试与代码质量工具缓存
+# ------------------------------
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+
+# ------------------------------
+# 6. 日志
+# ------------------------------
+*.log
+logs/
+data_process/logs/
+
+# ------------------------------
+# 7. PySpark / Hadoop 临时产物
+# ------------------------------
+spark-warehouse/
+metastore_db/
+*.derby.log
+derby.log
+.spark_history/
+
+# PySpark 在 Windows 上可能生成的 winutils 相关文件
+hadoop/
+tmp/
+
+# ------------------------------
+# 8. IDE / 编辑器
+# ------------------------------
+# VS Code
+.vscode/
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/launch.json
+
+# JetBrains (PyCharm / IDEA)
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Vim / Neovim
+*.swp
+*.swo
+*~
+.vim/
+.lvimrc
+
+# Sublime Text
+*.sublime-workspace
+*.sublime-project
+
+# Emacs
+*~\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# ------------------------------
+# 9. 操作系统垃圾文件
+# ------------------------------
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+
+# ------------------------------
+# 10. Jupyter Notebook（如未来引入）
+# ------------------------------
+.ipynb_checkpoints
+*.ipynb
+!example.ipynb
+
+# ------------------------------
+# 11. Flask / gunicorn 运行时
+# ------------------------------
+*.pid
+*.sock
+instance/
+.webassets-cache
+
+# ------------------------------
+# 12. docx 原始文件（保留，但如需控制体积可取消注释）
+# ------------------------------
+# docs/**/*.docx
