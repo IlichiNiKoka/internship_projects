@@ -100,10 +100,11 @@ internship_projects/
 
 ## 四、代码实现说明
 
-代码集中位于 [data_process/](data_process/)，由两个相互衔接的子系统组成：
+代码集中位于 [data_process/](data_process/)，由三个相互衔接的子系统组成：
 
 1. **数据清洗流水线**（根目录脚本，人员2）：对 SPARCS 2021 数据进行分块读取、清洗、标准化、跨块去重，产出统一字段类型、统一取值域、去重后的高质量 CSV，作为下游分析服务的唯一数据源。
 2. **大数据分析服务**（`app/` 子目录，人员3）：基于 Flask + PySpark 的 REST 服务，对清洗后数据提供多维度聚合、统计指标、关联分析、住院费用预测、再入院风险评估等接口，供上层 AI 智能层（人员1 / 人员4）调用。
+3. **AI 智能层**（`app/ai/` 子目录，人员4）：自然语言意图识别（≥90% 准确率）+ 分析结果文本生成（DeepSeek/OpenAI 兼容 + Mock 降级 + 幻觉检查）+ 意图识别优化（模糊 / 多维度 / 医疗术语联想），通过 `app/api/v1/ai.py` 对外暴露 REST 接口。
 
 ### 4.1 数据清洗流水线（人员2）
 
@@ -271,15 +272,47 @@ python scripts/smoke_test.py
 - `GET  /api/v1/meta/algorithms` — 已注册算法
 - `POST /api/v1/aggregations/run` — 多维度聚合
 - `POST /api/v1/algorithms/<name>/run` — 算法执行（statistics / association / cost_prediction / readmission_risk / group_aggregation）
-- `GET  /api/v1/algorithms/<name>` — 算法元信息（参数规格 / 说明）
+- `GET  /api/v1/ai/health` — AI 子系统健康检查
+- `GET  /api/v1/ai/meta` — AI 能力元数据（意图清单 / 数据集规模 / LLM 配置）
+- `POST /api/v1/ai/intent` — 自然语言意图识别（仅识别不调用下游）
+- `POST /api/v1/ai/summary` — 分析结果文本生成（已有 analysis_result）
+- `POST /api/v1/ai/execute` — 端到端（意图识别 → 下游调用 → 文本生成）
 
-### 4.5 二期规划（仓库尚未实现）
+### 4.5 AI 智能层（人员4）
+
+> 实现位置：[data_process/app/ai/](data_process/app/ai/)
+> 需求对应：3.X.1 基础自然语言意图识别 / 3.X.2 分析结果文本生成 / 3.X.4 意图识别优化
+
+| 文件 | 职责 |
+|---|---|
+| [data_process/app/ai/intent/catalog.py](data_process/app/ai/intent/catalog.py) | 7 个意图类别封闭集合（aggregation_query / statistics_overview / association_analysis / cost_prediction / readmission_risk / metadata_query / unsupported）+ 每类的下游能力映射 |
+| [data_process/app/ai/intent/terms.py](data_process/app/ai/intent/terms.py) | 医疗术语词典：维度关键词（17 维度）+ 取值同义词（年龄/性别/入院类型/严重程度/支付方式等）+ 指标关键词 + 算法关键词 + 元数据关键词 |
+| [data_process/app/ai/intent/training_data.py](data_process/app/ai/intent/training_data.py) | 人工标注训练 / 验证 / 测试集（共 142 条，覆盖 7 意图 + 模糊 / 多维 / 术语联想场景），用于准确率评估与二期 ML 模型训练 |
+| [data_process/app/ai/intent/classifier.py](data_process/app/ai/intent/classifier.py) | 规则引擎分类器：关键词评分 + 维度 / 指标 / 过滤条件抽取 + 多维度识别 + 模糊匹配 + 同义词联想；**测试集准确率 100%（≥90% 硬指标达标）** |
+| [data_process/app/ai/summary/prompts.py](data_process/app/ai/summary/prompts.py) | LLM Prompt 设计：角色锁定 + 幻觉控制约束 + 隐私脱敏 + 模板化 Mock 兜底 |
+| [data_process/app/ai/summary/llm_client.py](data_process/app/ai/summary/llm_client.py) | LLM 客户端：OpenAICompatibleClient（DeepSeek/OpenAI/本地 vLLM 通用）+ MockClient + DisabledClient + 工厂入口 |
+| [data_process/app/ai/summary/hallucination.py](data_process/app/ai/summary/hallucination.py) | 幻觉检查：源数据数字抽取 + 生成文本数字比对（容忍 2% 相对误差，集合长度合理推导）|
+| [data_process/app/ai/summary/generator.py](data_process/app/ai/summary/generator.py) | 文本生成主入口：空数据特判 → 调 LLM → Mock 兜底 → 幻觉检查 → 输出 |
+| [data_process/app/ai/service.py](data_process/app/ai/service.py) | 服务编排：意图识别 → 下游调度（aggregation / algorithm / metadata）→ 文本生成 |
+| [data_process/app/schemas/ai.py](data_process/app/schemas/ai.py) | 请求结构校验（marshmallow）|
+| [data_process/app/api/v1/ai.py](data_process/app/api/v1/ai.py) | REST API 蓝图：/intent /summary /execute /meta /health |
+| [data_process/tests/test_ai.py](data_process/tests/test_ai.py) | 37 个测试覆盖：准确率 / 多维度 / 模糊 / 术语联想 / Mock 降级 / 幻觉检查 / API 端到端 |
+
+**DeepSeek 接入说明**
+
+- 默认 provider=`auto`，API key 留空时自动降级到 Mock 模板（不报错，便于离线开发与 CI）
+- 配置 DeepSeek：在 `.env` 中填 `ANALYTICS_LLM_API_KEY=sk-xxx`，model 默认 `deepseek-chat`（V3），可改 `deepseek-reasoner`（R1）
+- DeepSeek 是 OpenAI 兼容协议，复用 openai SDK + `base_url=https://api.deepseek.com/v1`，无需单独 SDK
+- 切换到 OpenAI：`ANALYTICS_LLM_PROVIDER=openai` + `ANALYTICS_LLM_MODEL=gpt-4o-mini`
+- 切换到本地 vLLM：`ANALYTICS_LLM_BASE_URL=http://localhost:8000/v1` + `ANALYTICS_LLM_API_KEY=dummy`
+
+### 4.6 二期规划（仓库尚未实现）
 
 | 模块 | 规划内容 | 主责人 |
 |---|---|---|
 | 数据底座 | 数据质量评估（4 维度评分 + 可视化报告）、数据备份与恢复、大数据增量更新（MySQL / HDFS 入库） | 人员2 |
 | 分析服务 | 接入 Redis 替换进程内缓存；接入 MySQL / HDFS 数据底座；扩展 `DataProvider` 子类 | 人员3 |
-| AI 模型 | 基础自然语言意图识别（准确率 ≥ 90%）、意图识别优化（模糊 / 多维 / 医疗术语联想）、LLM 本地化部署（Qwen / BaiChuan + FastAPI） | 人员4 |
+| AI 模型 | ✅ 基础自然语言意图识别（准确率 ≥ 90%，已实现 [classifier.py](data_process/app/ai/intent/classifier.py)）+ ✅ 意图识别优化（模糊 / 多维 / 医疗术语联想，已实现 [terms.py](data_process/app/ai/intent/terms.py)）+ ✅ 分析结果文本生成（DeepSeek/OpenAI 兼容 + Mock 降级 + 幻觉检查，已实现 [generator.py](data_process/app/ai/summary/generator.py)）；⏳ LLM 本地化部署（Qwen / BaiChuan + FastAPI，尚未实现） | 人员4 |
 | AI 应用 | 智能工具调用（LangChain Tool 注册 + 意图-API 映射 + 重试）、多轮对话（会话 ID + Redis/LangChain Memory）、医疗洞察报告生成 | 人员1 |
 | 前端 | 大屏可视化（ECharts KPI / 联动 / 下载）、Web 聊天界面（自然语言 + 图表展示）、可视化进阶（3D / 地图 / 时序） | 人员5 |
 | 独立测试 | 覆盖全部 23 项功能的集成测试、端到端测试、模型测试集与发布建议 | 人员5 |
@@ -335,6 +368,9 @@ python scripts/smoke_test.py
 | 3.3.4 | API 性能优化 | [人员3-规约](docs/人员3/人员3-软件需求规约-功能设计.md#334-api性能优化) | [cache.py](data_process/app/core/cache.py) + [data_provider.py](data_process/app/data/data_provider.py) |
 | 3.3.5 | API 异常处理机制 | [人员3-规约](docs/人员3/人员3-软件需求规约-功能设计.md#335-api异常处理机制) | [exceptions.py](data_process/app/core/exceptions.py) + [middleware.py](data_process/app/core/middleware.py) |
 | 3.4.x | 复杂医疗大数据分析（疾病关联 / 费用预测 / 再入院风险） | [人员4-需求](docs/人员4/人员4需求文档.md) | [association.py](data_process/app/algorithms/association.py) + [cost_prediction.py](data_process/app/algorithms/cost_prediction.py) + [readmission_risk.py](data_process/app/algorithms/readmission_risk.py) |
+| 3.X.1 | 基础自然语言意图识别（准确率 ≥ 90%） | [人员4-需求](docs/人员4/人员4需求文档.md) | [classifier.py](data_process/app/ai/intent/classifier.py) + [catalog.py](data_process/app/ai/intent/catalog.py) + [training_data.py](data_process/app/ai/intent/training_data.py) |
+| 3.X.2 | 分析结果文本生成 | [人员4-需求](docs/人员4/人员4需求文档.md) | [generator.py](data_process/app/ai/summary/generator.py) + [llm_client.py](data_process/app/ai/summary/llm_client.py) + [prompts.py](data_process/app/ai/summary/prompts.py) + [hallucination.py](data_process/app/ai/summary/hallucination.py) + [service.py](data_process/app/ai/service.py) + [ai.py](data_process/app/api/v1/ai.py) |
+| 3.X.4 | 意图识别优化（模糊 / 多维度 / 医疗术语联想） | [人员4-需求](docs/人员4/人员4需求文档.md) | [terms.py](data_process/app/ai/intent/terms.py)（同义词 / 维度关键词）+ [classifier.py](data_process/app/ai/intent/classifier.py)（多维度抽取 + 模糊匹配） |
 | 3.5.x | 前端三项功能 | [人员5-前端需求](docs/人员5/人员5-前端具体需求.md) | 二期实现（待人员5 开发） |
 
 ---
