@@ -54,8 +54,10 @@ class CostPredictionAlgorithm(Algorithm):
     name = "cost_prediction"
     display_name = "住院费用预测"
     version = "1.0.0"
-    description = "基于住院时长、病情严重度、年龄组、入院类型、支付方式等特征，"
-                  "使用 Spark ML 线性回归预测住院总费用，输出 RMSE/MAE/R² 与特征系数。"
+    description = (
+        "基于住院时长、病情严重度、年龄组、入院类型、支付方式等特征，"
+        "使用 Spark ML 线性回归预测住院总费用，输出 RMSE/MAE/R² 与特征系数。"
+    )
     tags = ("ml", "regression", "prediction")
 
     param_specs = [

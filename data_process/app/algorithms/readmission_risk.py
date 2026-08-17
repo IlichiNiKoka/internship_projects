@@ -95,8 +95,10 @@ class ReadmissionRiskAlgorithm(Algorithm):
     name = "readmission_risk"
     display_name = "再入院风险评分"
     version = "1.0.0"
-    description = "基于高龄/急诊/病情严重度/死亡风险/长住院等特征的风险规则评分，"
-                  "输出 0~100 风险分与等级（脱敏数据无患者ID，一期为代理实现）。"
+    description = (
+        "基于高龄/急诊/病情严重度/死亡风险/长住院等特征的风险规则评分，"
+        "输出 0~100 风险分与等级（脱敏数据无患者ID，一期为代理实现）。"
+    )
     tags = ("risk", "rule-engine", "scoring")
 
     param_specs = [

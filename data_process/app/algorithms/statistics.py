@@ -29,8 +29,10 @@ class StatisticsAlgorithm(Algorithm):
     name = "statistics"
     display_name = "统计指标计算"
     version = "1.0.0"
-    description = "计算平台核心统计指标：总人次、平均住院时长、平均费用/成本、急诊率、"
-                  "平均病情严重度，以及年龄/性别/入院类型/支付/疾病/县区等分布。"
+    description = (
+        "计算平台核心统计指标：总人次、平均住院时长、平均费用/成本、急诊率、"
+        "平均病情严重度，以及年龄/性别/入院类型/支付/疾病/县区等分布。"
+    )
     tags = ("statistics", "dashboard", "overview")
 
     param_specs = [

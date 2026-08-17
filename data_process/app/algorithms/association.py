@@ -40,8 +40,10 @@ class AssociationAlgorithm(Algorithm):
     name = "association"
     display_name = "疾病关联分析"
     version = "1.0.0"
-    description = "挖掘诊断-操作（或任意两个白名单字段）间的关联规则，"
-                  "输出支持度/置信度/提升度 Top-N 规则。"
+    description = (
+        "挖掘诊断-操作（或任意两个白名单字段）间的关联规则，"
+        "输出支持度/置信度/提升度 Top-N 规则。"
+    )
     tags = ("mining", "association-rules", "apriori-lite")
 
     param_specs = [
