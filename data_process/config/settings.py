@@ -74,6 +74,23 @@ class Settings:
     ml_train_ratio: float = 0.8
     ml_seed: int = 42
 
+    # ---- AI 智能层（人员4：意图识别 / 文本生成）----
+    # LLM 提供方：auto(按 api_key 是否配置自动选) / openai / deepseek / mock / disabled
+    llm_provider: str = "auto"
+    llm_api_key: str = ""                  # 留空时降级到 Mock 生成，不报错
+    # Base URL 留空时：provider=deepseek 用 https://api.deepseek.com/v1；
+    # provider=openai 用官方；自建/本地 LLM 在 .env 显式填 http://localhost:8000/v1
+    llm_base_url: str = ""
+    # 默认模型：DeepSeek-V3（OpenAI 兼容接口）。可改为 deepseek-reasoner（R1）或 gpt-4o-mini 等
+    llm_model: str = "deepseek-chat"
+    llm_timeout: int = 30                  # 单次 LLM 调用超时（秒）
+    llm_temperature: float = 0.2           # 低温度减少幻觉
+    llm_max_tokens: int = 800              # 文本生成最大 token
+    # 意图识别：达标阈值（低于此值时分类器输出 unsupported）
+    intent_min_confidence: float = 0.45
+    # 文本生成幻觉检查：原文数字与生成文本数字允许的相对误差
+    hallucination_tolerance: float = 0.02
+
     # ---- 日志 ----
     log_dir: Path = LOG_DIR_DEFAULT
     log_level: str = "INFO"
@@ -125,3 +142,8 @@ def testing_settings(tmp_dir: Path, data_csv: Path | None = None) -> Settings:
         log_level="WARNING",
         log_dir=tmp_dir,
     )
+
+
+# pytest 默认按 test_* 收集测试函数，testing_settings 名字前缀也匹配，
+# 显式标记不收集，避免被误识别为测试函数
+testing_settings.__test__ = False  # type: ignore[attr-defined]
