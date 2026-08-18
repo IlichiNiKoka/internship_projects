@@ -1,0 +1,3 @@
+# 占位文件，确保 processed/ 目录被 git 跟踪。
+# 清洗后的 CSV（~854MB）与 processing_report.json 由 medical_data_pipeline.py
+# 自动生成，不入库（见根 .gitignore）。
