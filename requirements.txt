@@ -19,6 +19,10 @@ python-dotenv==1.2.2
 # Spark 3.5.1 官方支持 Python 3.8~3.12，兼容 Java 8/11/17
 pyspark==3.5.1
 
+# ---- 二期 3.3.4：Redis 缓存后端（可选依赖）----
+# 需要跨进程共享缓存时安装；未安装时服务自动降级为进程内缓存：
+# redis>=5.0
+
 # ---- AI 智能层（人员4：意图识别 / 文本生成）----
 # 通过 OpenAI 兼容协议接入 DeepSeek（base_url=https://api.deepseek.com/v1）
 # 也兼容 OpenAI / Azure / 本地 vLLM 等 OpenAI 兼容端点

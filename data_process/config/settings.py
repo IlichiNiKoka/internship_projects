@@ -58,11 +58,31 @@ class Settings:
     spark_driver_memory: str = "2g"
     spark_java_home: str = ""               # 留空自动探测（见 utils/spark.py）
     spark_shuffle_partitions: int = 8       # 本地模式无需过多分区
+    spark_adaptive_enabled: bool = True     # Spark SQL AQE 自适应执行（二期任务参数优化）
 
-    # ---- 结果缓存（一期：进程内 TTL 缓存；二期切换 Redis，接口不变）----
+    # ---- 结果缓存（一期：进程内 TTL 缓存；二期支持 Redis 后端）----
     cache_enabled: bool = True
+    cache_backend: str = "in-memory"       # in-memory / redis（redis 不可用时自动降级）
     cache_ttl_seconds: int = 300
     cache_max_entries: int = 256
+    redis_host: str = "127.0.0.1"
+    redis_port: int = 6379
+    redis_db: int = 0
+    redis_password: str = ""
+    redis_connect_timeout: float = 2.0     # 连接/读写超时（秒）
+
+    # ---- 超时与慢查询（二期 3.3.4 API 性能优化）----
+    agg_timeout_seconds: float = 120.0     # 聚合计算超时阈值，<=0 表示不限制
+    algo_timeout_seconds: float = 300.0    # 算法计算超时阈值，<=0 表示不限制
+    slow_query_threshold_seconds: float = 5.0  # 超过该耗时的请求记入慢查询并告警
+
+    # ---- 权限与限流（二期 3.3.5 API 异常处理机制）----
+    api_auth_enabled: bool = False         # 是否启用 API Token 认证
+    api_auth_tokens: str = ""              # 逗号分隔的合法 Token；启用认证但留空则拒绝所有请求
+    api_auth_public_paths: str = "/api/v1/health"  # 免认证路径前缀（逗号分隔）
+    rate_limit_enabled: bool = False       # 是否启用限流
+    rate_limit_requests: int = 100         # 滑动窗口内单个客户端允许的最大请求数
+    rate_limit_window_seconds: int = 60    # 滑动窗口长度（秒）
 
     # ---- 聚合接口限制 ----
     agg_default_limit: int = 100

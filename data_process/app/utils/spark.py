@@ -69,6 +69,12 @@ def _resolve_java_home(settings: Settings) -> str:
     )
 
 
+def _pyarrow_available() -> bool:
+    """检测 pyarrow 是否可用（Arrow 优化需要）。"""
+    import importlib.util
+    return importlib.util.find_spec("pyarrow") is not None
+
+
 def build_spark_session(settings: Settings) -> SparkSession:
     """构建（或复用）SparkSession，统一环境变量与常用参数。
 
@@ -94,6 +100,16 @@ def build_spark_session(settings: Settings) -> SparkSession:
         .master(settings.spark_master)
         .config("spark.driver.memory", settings.spark_driver_memory)
         .config("spark.sql.shuffle.partitions", settings.spark_shuffle_partitions)
+        # 二期 3.3.4：Spark SQL AQE 自适应执行（动态合并 shuffle 分区，减少小任务开销）
+        .config("spark.sql.adaptive.enabled",
+                "true" if settings.spark_adaptive_enabled else "false")
+        .config("spark.sql.adaptive.coalescePartitions.enabled",
+                "true" if settings.spark_adaptive_enabled else "false")
+        # Arrow 优化（安装 pyarrow 时启用）：本地数据转换与 collect 在驱动进程完成，
+        # 兼容性更好、速度更快；未安装时回退到 Python worker 路径
+        .config("spark.sql.execution.arrow.pyspark.enabled",
+                "true" if _pyarrow_available() else "false")
+        .config("spark.sql.execution.arrow.pyspark.fallback.enabled", "true")
         .config("spark.sql.session.timeZone", "UTC")
         # 本地模式关闭 UI 端口冲突告警，允许多进程测试
         .config("spark.ui.enabled", "true" if settings.env != "testing" else "false")

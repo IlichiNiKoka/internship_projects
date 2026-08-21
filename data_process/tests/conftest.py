@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import random
+import os
 import sys
 from pathlib import Path
 
@@ -16,11 +17,19 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+# Spark 执行器（Python worker）必须使用当前解释器：
+# 否则 worker 会走 PATH 上不兼容的 python（例如无 pyspark 的 conda base），
+# 导致 "Python worker failed to connect back"。与 app/utils/spark.py 行为一致。
+os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
+os.environ.setdefault("PYSPARK_DRIVER_PYTHON", sys.executable)
+
 # JAVA_HOME 由 app/utils/spark.py 自动探测（环境变量 / 候选路径）。
 # 如需指定，请在 .env 设置 ANALYTICS_SPARK_JAVA_HOME。
 
 import pytest
+import pandas as pd
 from pyspark.sql import SparkSession
+from pyspark.sql.types import DoubleType, IntegerType
 
 from app import create_app
 from app.data.data_provider import MemoryDataProvider, SPARCS_SCHEMA
@@ -77,6 +86,10 @@ def spark():
         .appName("analytics-service-test")
         .config("spark.ui.enabled", "false")
         .config("spark.sql.shuffle.partitions", "4")
+        # Arrow：本地数据↔DataFrame 转换与 collect 全部在驱动进程完成，
+        # 避免 Windows 上 Python worker 崩溃导致的任务失败
+        .config("spark.sql.execution.arrow.pyspark.enabled", "true")
+        .config("spark.sql.execution.arrow.pyspark.fallback.enabled", "true")
         .getOrCreate()
     )
     session.sparkContext.setLogLevel("ERROR")
@@ -88,7 +101,21 @@ def spark():
 def sample_df(spark):
     rnd = random.Random(42)
     rows = [_row(i, rnd) for i in range(N)]
-    df = spark.createDataFrame(rows, schema=SPARCS_SCHEMA)
+
+    # 经 pandas + Arrow 创建 DataFrame（在驱动进程完成，不启动 Python worker）：
+    # Windows 上 pyspark 的 Python worker 不可靠，而 createDataFrame(列表) 默认
+    # 走 PythonRDD（需 worker），这里改用 Arrow 路径既快又稳。
+    names = SPARCS_SCHEMA.names
+    pdf = pd.DataFrame({name: [row[k] for row in rows] for k, name in enumerate(names)})
+    # 含 None 的整型列会被 pandas 提升为 float，需转回 nullable Int64 以匹配 schema
+    for field in SPARCS_SCHEMA.fields:
+        if isinstance(field.dataType, IntegerType):
+            pdf[field.name] = pdf[field.name].astype("Int64")
+        elif isinstance(field.dataType, DoubleType):
+            pdf[field.name] = pdf[field.name].astype("float64")
+    pdf = pdf[names]
+
+    df = spark.createDataFrame(pdf, schema=SPARCS_SCHEMA)
     return df.cache()
 
 

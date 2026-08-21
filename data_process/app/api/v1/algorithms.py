@@ -22,7 +22,10 @@ bp = Blueprint("algorithms", __name__, url_prefix="/api/v1/algorithms")
 def run_algorithm(name: str):
     """统一算法调用接口：选择算法组件并传入参数，返回归一化结果。"""
     payload = AlgorithmRunSchema().load(request.get_json(silent=True) or {})
-    service = AlgorithmService(ext.data_provider)
+    service = AlgorithmService(
+        ext.data_provider,
+        timeout_seconds=ext.settings.algo_timeout_seconds,   # 二期：超时控制（504）
+    )
     result = service.run(name, payload.get("params") or {})
     return success(result)
 

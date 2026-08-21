@@ -20,6 +20,7 @@ import logging
 import threading
 from typing import Any
 
+import pandas as pd
 from pyspark.ml import Pipeline, PipelineModel
 from pyspark.ml.evaluation import RegressionEvaluator
 from pyspark.ml.feature import StringIndexer, VectorAssembler
@@ -204,7 +205,16 @@ class CostPredictionAlgorithm(Algorithm):
             "payment_typology_1": str(sample.get("payment_type") or "Unknown"),
             "apr_medical_surgical_description": str(sample.get("medical_surgical") or "Unknown"),
         }
-        row_df = spark.createDataFrame([row], schema=ctx.dataframe.select(
+        row_df = spark.createDataFrame(pd.DataFrame({
+            "length_of_stay": pd.Series([row["length_of_stay"]], dtype="int64"),
+            "apr_severity_of_illness_code": pd.Series(
+                [row["apr_severity_of_illness_code"]], dtype="int64"),
+            "age_group": pd.Series([row["age_group"]], dtype="string"),
+            "type_of_admission": pd.Series([row["type_of_admission"]], dtype="string"),
+            "payment_typology_1": pd.Series([row["payment_typology_1"]], dtype="string"),
+            "apr_medical_surgical_description": pd.Series(
+                [row["apr_medical_surgical_description"]], dtype="string"),
+        }), schema=ctx.dataframe.select(
             "length_of_stay", "apr_severity_of_illness_code", "age_group",
             "type_of_admission", "payment_typology_1", "apr_medical_surgical_description",
         ).schema)

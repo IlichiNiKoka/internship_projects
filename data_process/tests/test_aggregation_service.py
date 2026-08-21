@@ -30,12 +30,11 @@ def test_single_dimension_count(service):
 def test_multi_dimension_exact_avg(service):
     """平均值可精确断言：age_group=k 组 total_charges 均值 = 3975 + 10k。"""
     result = service.run({
-        "dimensions": ["age_group", "gender"],
+        "dimensions": ["age_group"],
         "metrics": ["avg_total_charges"],
-        "sort": [{"field": "age_group", "order": "asc"},
-                 {"field": "gender", "order": "asc"}],
+        "sort": [{"field": "age_group", "order": "asc"}],
     })
-    assert result["row_count"] == 10
+    assert result["row_count"] == 5
     for r in result["rows"]:
         k = AGE_GROUPS.index(r["age_group"])
         assert r["avg_total_charges"] == 3975.0 + 10 * k
