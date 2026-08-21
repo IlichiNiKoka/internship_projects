@@ -15,7 +15,7 @@ import logging
 import time
 from abc import ABC, abstractmethod
 
-from pyspark.sql import DataFrame, SparkSession
+from pyspark.sql import DataFrame, SparkSession, functions as F
 from pyspark.sql.types import (
     DoubleType,
     IntegerType,
@@ -90,12 +90,18 @@ class SparkDataProvider(DataProvider):
         logger.info("开始加载数据: %s (master=%s)", csv_path, self._settings.spark_master)
         try:
             spark = _get_or_create_spark(self._settings)
+            # 按“列名”而非“列位置”读取：清洗文件列顺序可能与 SPARCS_SCHEMA 不同
+            # （例如 length_of_stay 可能在前面或后面）。先整表按字符串读入，
+            # 再按 schema 列名逐列 cast 为正确类型，最后重排为标准字段顺序。
             df = (
                 spark.read
                 .option("header", "true")
-                .schema(SPARCS_SCHEMA)
+                .option("inferSchema", "false")
                 .csv(csv_path.as_posix())
             )
+            for field in SPARCS_SCHEMA.fields:
+                df = df.withColumn(field.name, F.col(field.name).cast(field.dataType))
+            df = df.select(*[f.name for f in SPARCS_SCHEMA.fields])
             df = df.cache()                    # 缓存全表，后续聚合复用
             self._row_count = df.count()       # 触发加载并物化缓存
             self._df = df
