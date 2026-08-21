@@ -57,6 +57,17 @@ class AssociationAlgorithm(Algorithm):
                   min_value=1, max_value=200, description="返回规则条数"),
     ]
 
+    def validate(self, params: dict) -> dict:
+        """统一参数校验（备选流A）：前件与后件字段不能相同。"""
+        validated = super().validate(params)
+        if validated["antecedent"] == validated["consequent"]:
+            raise ParamValidationError(
+                detail={"antecedent": validated["antecedent"],
+                        "consequent": validated["consequent"]},
+                message="前件与后件字段不能相同",
+            )
+        return validated
+
     def _execute(self, ctx: AlgorithmContext) -> tuple[Any, dict | None, str]:
         df = ctx.dataframe
         a_field = ctx.params["antecedent"]

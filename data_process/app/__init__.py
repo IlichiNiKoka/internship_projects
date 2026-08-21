@@ -12,7 +12,9 @@ import logging
 
 from flask import Flask
 
-from app.core.cache import InMemoryTTLCache, NullCache
+from app.core.cache import build_cache
+from app.core.monitor import PerformanceMonitor
+from app.core.ratelimiter import SlidingWindowLimiter
 from app.utils.logging_conf import configure_logging
 from config.settings import Settings
 
@@ -33,11 +35,12 @@ def create_app(settings: Settings | None = None, data_provider=None) -> Flask:
     # 3) 扩展容器
     from app.extensions import ext
     ext.settings = settings
-    ext.cache = (
-        InMemoryTTLCache(max_entries=settings.cache_max_entries,
-                         ttl_seconds=settings.cache_ttl_seconds)
-        if settings.cache_enabled else NullCache()
-    )
+    # 二期 3.3.4：in-memory / redis 可切换，Redis 不可用时自动降级进程内缓存
+    ext.cache = build_cache(settings)
+    # 二期 3.3.4 / 3.3.5：接口耗时监控与滑动窗口限流
+    ext.monitor = PerformanceMonitor(
+        slow_query_threshold_seconds=settings.slow_query_threshold_seconds)
+    ext.rate_limiter = SlidingWindowLimiter()
 
     # 4) 数据源（默认 Spark CSV；测试可注入替身）
     if data_provider is None:
