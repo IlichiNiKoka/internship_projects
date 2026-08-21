@@ -25,7 +25,7 @@ class CacheBackend(ABC):
     def get(self, key: str) -> Any: ...
 
     @abstractmethod
-    def set(self, key: str, value: Any, ttl_seconds: int) -> None: ...
+    def set(self, key: str, value: Any, ttl_seconds: int | None = None) -> None: ...
 
     @abstractmethod
     def delete(self, key: str) -> None: ...
@@ -44,7 +44,7 @@ class NullCache(CacheBackend):
     def get(self, key: str) -> Any:
         return None
 
-    def set(self, key: str, value: Any, ttl_seconds: int) -> None:
+    def set(self, key: str, value: Any, ttl_seconds: int | None = None) -> None:
         return None
 
     def delete(self, key: str) -> None:

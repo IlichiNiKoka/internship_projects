@@ -53,6 +53,37 @@ SPARCS_SCHEMA = StructType(
 )
 
 
+def _schema_from_csv_header(csv_path) -> StructType:
+    """按 CSV 实际表头顺序构建 Spark Schema（列对齐修复）。
+
+    背景：Spark 在显式提供 schema 时按“列位置”解析 CSV（enforceSchema 默认
+    true），不会用表头名称匹配字段。若 schema 字段顺序与表头列顺序不一致，
+    整表数据会错位（例如 type_of_admission 读到住院天数、length_of_stay 读到
+    支付方式而全部为 null）。
+
+    这里先读取文件表头，再按表头顺序用“字段名 -> 类型”字典映射出 schema，
+    与清洗流水线产出的列顺序解耦，任何列顺序下都能正确对齐。
+    """
+    import csv as csv_module
+
+    type_by_name = {f.name: f.dataType for f in SPARCS_SCHEMA.fields}
+    with csv_path.open("r", encoding="utf-8-sig", newline="") as fh:
+        header = next(csv_module.reader(fh))
+
+    fields: list[StructField] = []
+    for raw in header:
+        name = raw.strip()
+        data_type = type_by_name.get(name)
+        if data_type is None:
+            logger.warning("CSV 表头含未知列，已忽略: %s", name)
+            continue
+        fields.append(StructField(name, data_type, True))
+    if len(fields) != len(SPARCS_SCHEMA.fields):
+        logger.warning("CSV 表头列数(%d)与 Schema 字段数(%d)不一致，请核对数据文件",
+                       len(fields), len(SPARCS_SCHEMA.fields))
+    return StructType(fields)
+
+
 class DataProvider(ABC):
     """数据提供者统一接口。"""
 
@@ -90,10 +121,12 @@ class SparkDataProvider(DataProvider):
         logger.info("开始加载数据: %s (master=%s)", csv_path, self._settings.spark_master)
         try:
             spark = _get_or_create_spark(self._settings)
+            # 按表头顺序构建 schema，避免列错位（见 _schema_from_csv_header 说明）
+            schema = _schema_from_csv_header(csv_path)
             df = (
                 spark.read
                 .option("header", "true")
-                .schema(SPARCS_SCHEMA)
+                .schema(schema)
                 .csv(csv_path.as_posix())
             )
             df = df.cache()                    # 缓存全表，后续聚合复用

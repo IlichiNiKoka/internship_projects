@@ -1,0 +1,2 @@
+# 子目录运行说明中的兼容入口；统一依赖仍由仓库根 requirements.txt 管理。
+-r ../requirements.txt

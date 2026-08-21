@@ -27,6 +27,7 @@ SYSTEM_PROMPT = """你是一名资深的医疗大数据分析师。
 5. 输出严格分两段：第一段「摘要正文」100-300 字；第二段「关键数字」按「字段名: 数值」逐行列出；
 6. 不得输出 markdown 表格、链接、图片，仅纯文本；
 7. 若「分析结果」为空或全为 0，请直接回复："当前没有可用的分析数据。"，不要编造业务结论。
+8. `risk_score` 是规则引擎的风险评分，不是事件发生概率；不得把它表述为“概率”或“预测发生率”。
 """
 
 
@@ -75,15 +76,25 @@ MOCK_TEMPLATES = {
         "其中提升度最高的是「{top_rule}」，"
         "支持度 {support}，置信度 {confidence}。"
     ),
-    "cost_prediction": (
-        "费用预测模型在测试集上 MAE={mae}，R²={r2}。"
-        "对给定样本预测总费用约 {predicted_charge}。"
+    "association_analysis_empty": "当前参数下未发现满足阈值的关联规则。",
+    "cost_prediction_train": (
+        "费用预测模型训练评估已完成，测试集 MAE={mae}，"
+        "RMSE={rmse}，R²={r2}。"
     ),
-    "readmission_risk": (
-        "再入院风险分析：高风险人群占比 {high_risk_rate}，"
-        "其中{top_group}风险最高。"
-        "对给定样本预测再入院概率 {predicted_risk}。"
+    "cost_prediction_predict": (
+        "已根据给定住院特征完成单样本费用预测，预测总费用约 "
+        "{predicted_charge} {currency}。"
     ),
+    "cost_prediction": "费用预测分析已完成，详细数值请查看结构化结果。",
+    "readmission_risk_profile": (
+        "再入院代理风险画像已完成，高风险人群比例为 {high_risk_rate}，"
+        "高风险记录中数量最多的年龄组为 {top_group}。"
+    ),
+    "readmission_risk_score": (
+        "给定住院特征的再入院代理风险评分为 {risk_score} 分，"
+        "风险等级为 {risk_level}；该评分不是实际再入院概率。"
+    ),
+    "readmission_risk": "再入院代理风险分析已完成，详细数值请查看结构化结果。",
     "metadata_query": "已返回系统能力元数据，共 {item_count} 项。",
     "unsupported": "该查询不在医疗大数据分析范围内，无法生成摘要。",
 }
@@ -91,7 +102,11 @@ MOCK_TEMPLATES = {
 
 def mock_render(intent: str, params: dict) -> str:
     """Mock 模式：不调 LLM，按模板渲染中文摘要。"""
-    template = MOCK_TEMPLATES.get(intent, MOCK_TEMPLATES["unsupported"])
+    mode = params.get("mode")
+    mode_key = f"{intent}_{mode}" if mode else intent
+    template = MOCK_TEMPLATES.get(
+        mode_key, MOCK_TEMPLATES.get(intent, MOCK_TEMPLATES["unsupported"])
+    )
     try:
         return template.format(**{k: (v if v is not None else "—") for k, v in params.items()})
     except (KeyError, IndexError):

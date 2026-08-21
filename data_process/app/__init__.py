@@ -9,17 +9,23 @@
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
-from flask import Flask
-
-from app.core.cache import InMemoryTTLCache, NullCache
-from app.utils.logging_conf import configure_logging
-from config.settings import Settings
+if TYPE_CHECKING:
+    from flask import Flask
+    from config.settings import Settings
 
 logger = logging.getLogger(__name__)
 
 
-def create_app(settings: Settings | None = None, data_provider=None) -> Flask:
+def create_app(settings: "Settings | None" = None, data_provider=None) -> "Flask":
+    # 延迟导入 Web/配置依赖，使意图、工具、会话等纯业务模块可在无 Flask 的
+    # 离线单元测试中独立导入。
+    from flask import Flask
+    from app.core.cache import InMemoryTTLCache, NullCache
+    from app.utils.logging_conf import configure_logging
+    from config.settings import Settings
+
     settings = settings or Settings.load()
 
     # 1) 日志
@@ -44,6 +50,9 @@ def create_app(settings: Settings | None = None, data_provider=None) -> Flask:
         from app.data.data_provider import SparkDataProvider
         data_provider = SparkDataProvider(settings)
     ext.data_provider = data_provider
+    # 人员1应用服务按首次 /assistant 请求惰性构建；每个 Flask app 重置，
+    # 避免测试/多应用场景复用旧 settings 或 data_provider。
+    ext.application_service = None
 
     # 5) 算法组件注册（幂等）
     from app.algorithms.base import register_builtin_algorithms
