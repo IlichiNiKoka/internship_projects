@@ -52,6 +52,18 @@ class Settings:
     # ---- 数据源 ----
     data_csv_path: Path = DEFAULT_CLEAN_CSV
 
+    # ---- 结构化大数据入库（人员2 · 二期 MySQL / SQLite 兜底）----
+    # engine: auto(MySQL 优先，失败降级 SQLite) / mysql / sqlite
+    db_engine: str = "auto"
+    db_host: str = "127.0.0.1"
+    db_port: int = 3306
+    db_user: str = "root"
+    db_password: str = ""
+    db_name: str = "medical_analytics"
+    db_table: str = "sparcs_discharge_2021"
+    db_batch_size: int = 10000          # 每批写入行数（批量 INSERT，避免单条过慢）
+    db_sqlite_path: Path = DEFAULT_CLEAN_CSV.parent / "sparcs.db"  # SQLite 兜底文件
+
     # ---- Spark ----
     spark_master: str = "local[*]"          # 生产可改为 yarn / spark://...
     spark_log_level: str = "WARN"           # Spark 内部日志级别
