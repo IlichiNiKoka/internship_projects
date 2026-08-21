@@ -1,0 +1,1002 @@
+{
+  "meta": {
+    "generatedAt": "2026-08-14 21:34:12",
+    "sourceCsv": "Hospital_Inpatient_Discharges__SPARCS_De-Identified___2021_20231012_clean.csv",
+    "cleanRows": 2095384,
+    "frontendRequirementsDocStatus": "empty_file",
+    "notes": [
+      "前端页面依据总指导文件、项目分工文档、处理后 CSV 与 processing_report.json 构建。",
+      "智能交互与算法洞察页面提供静态汇总模式与在线 API 模式切换。",
+      "再入院风险分层为前端演示代理口径，用于页面呈现，不替代后端正式模型输出。"
+    ]
+  },
+  "overview": {
+    "dischargeCount": 2095384,
+    "avgLengthOfStay": 5.7,
+    "avgTotalCharges": 73432.24,
+    "avgTotalCosts": 22025.59,
+    "emergencyRate": 62.69,
+    "topCounty": "Manhattan",
+    "topDiagnosis": "LIVEBORN"
+  },
+  "dashboard": {
+    "ageDistribution": [
+      {
+        "name": "70 or Older",
+        "value": 618253
+      },
+      {
+        "name": "50 to 69",
+        "value": 583432
+      },
+      {
+        "name": "30 to 49",
+        "value": 415210
+      },
+      {
+        "name": "0 to 17",
+        "value": 286670
+      },
+      {
+        "name": "18 to 29",
+        "value": 191819
+      }
+    ],
+    "genderDistribution": [
+      {
+        "name": "Female",
+        "value": 1141993
+      },
+      {
+        "name": "Male",
+        "value": 953235
+      },
+      {
+        "name": "Unknown",
+        "value": 156
+      }
+    ],
+    "admissionDistribution": [
+      {
+        "name": "Emergency",
+        "value": 1382048
+      },
+      {
+        "name": "Elective",
+        "value": 351673
+      },
+      {
+        "name": "Newborn",
+        "value": 194818
+      },
+      {
+        "name": "Urgent",
+        "value": 157995
+      },
+      {
+        "name": "Trauma",
+        "value": 7688
+      },
+      {
+        "name": "Not Available",
+        "value": 1162
+      }
+    ],
+    "paymentDistribution": [
+      {
+        "name": "Medicare",
+        "value": 824508
+      },
+      {
+        "name": "Medicaid",
+        "value": 643810
+      },
+      {
+        "name": "Private Health Insurance",
+        "value": 306334
+      },
+      {
+        "name": "Blue Cross/Blue Shield",
+        "value": 223277
+      },
+      {
+        "name": "Managed Care, Unspecified",
+        "value": 28210
+      },
+      {
+        "name": "Self-Pay",
+        "value": 27063
+      },
+      {
+        "name": "Miscellaneous/Other",
+        "value": 22419
+      },
+      {
+        "name": "Federal/State/Local/VA",
+        "value": 18529
+      },
+      {
+        "name": "Department of Corrections",
+        "value": 1234
+      }
+    ],
+    "dispositionDistribution": [
+      {
+        "name": "Home or Self Care",
+        "value": 1369125
+      },
+      {
+        "name": "Home w/ Home Health Services",
+        "value": 301093
+      },
+      {
+        "name": "Skilled Nursing Home",
+        "value": 179421
+      },
+      {
+        "name": "Expired",
+        "value": 63676
+      },
+      {
+        "name": "Left Against Medical Advice",
+        "value": 56512
+      },
+      {
+        "name": "Inpatient Rehabilitation Facility",
+        "value": 34170
+      },
+      {
+        "name": "Short-term Hospital",
+        "value": 34120
+      },
+      {
+        "name": "Hospice - Home",
+        "value": 12384
+      },
+      {
+        "name": "Psychiatric Hospital or Unit of Hosp",
+        "value": 10757
+      },
+      {
+        "name": "Hospice - Medical Facility",
+        "value": 8997
+      }
+    ],
+    "serviceAreaDistribution": [
+      {
+        "name": "New York City",
+        "value": 936330
+      },
+      {
+        "name": "Long Island",
+        "value": 339698
+      },
+      {
+        "name": "Hudson Valley",
+        "value": 227888
+      },
+      {
+        "name": "Central NY",
+        "value": 147001
+      },
+      {
+        "name": "Western NY",
+        "value": 143764
+      },
+      {
+        "name": "Finger Lakes",
+        "value": 142853
+      },
+      {
+        "name": "Capital/Adirond",
+        "value": 119679
+      },
+      {
+        "name": "Southern Tier",
+        "value": 27538
+      },
+      {
+        "name": "Unknown",
+        "value": 10633
+      }
+    ],
+    "medicalSurgicalDistribution": [
+      {
+        "name": "Medical",
+        "value": 1599996
+      },
+      {
+        "name": "Surgical",
+        "value": 492840
+      },
+      {
+        "name": "Not Applicable",
+        "value": 2548
+      }
+    ],
+    "severityDistribution": [
+      {
+        "name": "Moderate",
+        "value": 759260
+      },
+      {
+        "name": "Minor",
+        "value": 634655
+      },
+      {
+        "name": "Major",
+        "value": 498558
+      },
+      {
+        "name": "Extreme",
+        "value": 200363
+      },
+      {
+        "name": "Unknown",
+        "value": 2548
+      }
+    ],
+    "mortalityDistribution": [
+      {
+        "name": "Minor",
+        "value": 1064795
+      },
+      {
+        "name": "Moderate",
+        "value": 436502
+      },
+      {
+        "name": "Major",
+        "value": 393584
+      },
+      {
+        "name": "Extreme",
+        "value": 197955
+      },
+      {
+        "name": "Unknown",
+        "value": 2548
+      }
+    ],
+    "topDiagnoses": [
+      {
+        "name": "LIVEBORN",
+        "dischargeCount": 196021,
+        "avgCharges": 35332.84,
+        "avgCosts": 9117.33
+      },
+      {
+        "name": "SEPTICEMIA",
+        "dischargeCount": 137755,
+        "avgCharges": 121736.1,
+        "avgCosts": 36269.74
+      },
+      {
+        "name": "CORONAVIRUS DISEASE 2019 (COVID-19)",
+        "dischargeCount": 82451,
+        "avgCharges": 95135.03,
+        "avgCosts": 30236.72
+      },
+      {
+        "name": "HEART FAILURE",
+        "dischargeCount": 58368,
+        "avgCharges": 80963.29,
+        "avgCosts": 23766.7
+      },
+      {
+        "name": "COMPLICATIONS SPECIFIED DURING CHILDBIRTH",
+        "dischargeCount": 40689,
+        "avgCharges": 28686.89,
+        "avgCosts": 9962.9
+      },
+      {
+        "name": "DIABETES MELLITUS WITH COMPLICATION",
+        "dischargeCount": 40450,
+        "avgCharges": 72603.04,
+        "avgCosts": 23482.75
+      },
+      {
+        "name": "ALCOHOL-RELATED DISORDERS",
+        "dischargeCount": 39292,
+        "avgCharges": 34046.76,
+        "avgCosts": 10635.69
+      },
+      {
+        "name": "SCHIZOPHRENIA SPECTRUM AND OTHER PSYCHOTIC DISORDERS",
+        "dischargeCount": 37170,
+        "avgCharges": 73474.38,
+        "avgCosts": 31573.76
+      },
+      {
+        "name": "OSTEOARTHRITIS",
+        "dischargeCount": 35555,
+        "avgCharges": 77177.49,
+        "avgCosts": 23732.83
+      },
+      {
+        "name": "CARDIAC DYSRHYTHMIAS",
+        "dischargeCount": 33736,
+        "avgCharges": 78913.03,
+        "avgCosts": 20815.3
+      },
+      {
+        "name": "CEREBRAL INFARCTION",
+        "dischargeCount": 28801,
+        "avgCharges": 98042.57,
+        "avgCosts": 26912.56
+      },
+      {
+        "name": "ACUTE MYOCARDIAL INFARCTION",
+        "dischargeCount": 27675,
+        "avgCharges": 111020.96,
+        "avgCosts": 29661.95
+      }
+    ],
+    "topCounties": [
+      {
+        "name": "Manhattan",
+        "dischargeCount": 364141,
+        "avgCharges": 117210.01,
+        "avgCosts": 36086.58
+      },
+      {
+        "name": "Kings",
+        "dischargeCount": 190041,
+        "avgCharges": 69171.59,
+        "avgCosts": 24886.37
+      },
+      {
+        "name": "Nassau",
+        "dischargeCount": 182843,
+        "avgCharges": 99301.81,
+        "avgCosts": 20793.06
+      },
+      {
+        "name": "Queens",
+        "dischargeCount": 170012,
+        "avgCharges": 66715.86,
+        "avgCosts": 18261.94
+      },
+      {
+        "name": "Bronx",
+        "dischargeCount": 162431,
+        "avgCharges": 82122.42,
+        "avgCosts": 26897.34
+      },
+      {
+        "name": "Suffolk",
+        "dischargeCount": 156855,
+        "avgCharges": 75814.91,
+        "avgCosts": 19893.35
+      },
+      {
+        "name": "Westchester",
+        "dischargeCount": 114902,
+        "avgCharges": 92146.33,
+        "avgCosts": 22773.75
+      },
+      {
+        "name": "Erie",
+        "dischargeCount": 111136,
+        "avgCharges": 41381.94,
+        "avgCosts": 16765.59
+      },
+      {
+        "name": "Monroe",
+        "dischargeCount": 108246,
+        "avgCharges": 37139.63,
+        "avgCosts": 15552.23
+      },
+      {
+        "name": "Onondaga",
+        "dischargeCount": 76243,
+        "avgCharges": 55515.41,
+        "avgCosts": 18765.34
+      }
+    ],
+    "topFacilities": [
+      {
+        "name": "Mount Sinai Hospital",
+        "dischargeCount": 49573,
+        "avgCharges": 125295.43,
+        "avgCosts": 33663.49
+      },
+      {
+        "name": "North Shore University Hospital",
+        "dischargeCount": 49143,
+        "avgCharges": 112532.15,
+        "avgCosts": 20401.82
+      },
+      {
+        "name": "NYU Langone Hospitals",
+        "dischargeCount": 42798,
+        "avgCharges": 166129.53,
+        "avgCosts": 39558.57
+      },
+      {
+        "name": "New York-Presbyterian Hospital - New York Weill Cornell Center",
+        "dischargeCount": 42209,
+        "avgCharges": 126595.27,
+        "avgCosts": 40779.61
+      },
+      {
+        "name": "New York-Presbyterian Hospital - Columbia Presbyterian Center",
+        "dischargeCount": 41779,
+        "avgCharges": 158847.21,
+        "avgCosts": 49357.71
+      },
+      {
+        "name": "Strong Memorial Hospital",
+        "dischargeCount": 41394,
+        "avgCharges": 48593.07,
+        "avgCosts": 20718.35
+      },
+      {
+        "name": "Long Island Jewish Medical Center",
+        "dischargeCount": 40371,
+        "avgCharges": 97149.54,
+        "avgCosts": 18932.36
+      },
+      {
+        "name": "Albany Medical Center Hospital",
+        "dischargeCount": 36468,
+        "avgCharges": 58796.73,
+        "avgCosts": 17338.51
+      },
+      {
+        "name": "Maimonides Medical Center",
+        "dischargeCount": 36036,
+        "avgCharges": 72906.56,
+        "avgCosts": 18769.52
+      },
+      {
+        "name": "Montefiore Medical Center - Henry & Lucy Moses Div",
+        "dischargeCount": 35992,
+        "avgCharges": 142380.47,
+        "avgCosts": 26461.98
+      }
+    ],
+    "admissionCostComparison": [
+      {
+        "name": "Emergency",
+        "dischargeCount": 1382048,
+        "avgCharges": 74708.43,
+        "avgCosts": 22264.96,
+        "avgLengthOfStay": 6.2
+      },
+      {
+        "name": "Elective",
+        "dischargeCount": 351673,
+        "avgCharges": 84732.86,
+        "avgCosts": 26114.64,
+        "avgLengthOfStay": 4.5
+      },
+      {
+        "name": "Newborn",
+        "dischargeCount": 194818,
+        "avgCharges": 35393.46,
+        "avgCosts": 9166.22,
+        "avgLengthOfStay": 3.4
+      },
+      {
+        "name": "Urgent",
+        "dischargeCount": 157995,
+        "avgCharges": 81548.96,
+        "avgCosts": 26190.75,
+        "avgLengthOfStay": 6.3
+      },
+      {
+        "name": "Trauma",
+        "dischargeCount": 7688,
+        "avgCharges": 125529.28,
+        "avgCosts": 32408.5,
+        "avgLengthOfStay": 6.6
+      },
+      {
+        "name": "Not Available",
+        "dischargeCount": 1162,
+        "avgCharges": 64681.6,
+        "avgCosts": 20754.7,
+        "avgLengthOfStay": 6.7
+      }
+    ],
+    "severityMortalityMatrix": {
+      "xAxis": [
+        "Minor",
+        "Moderate",
+        "Major",
+        "Extreme",
+        "Unknown"
+      ],
+      "yAxis": [
+        "Minor",
+        "Moderate",
+        "Major",
+        "Extreme",
+        "Unknown"
+      ],
+      "values": [
+        {
+          "severity": "Major",
+          "mortality": "Extreme",
+          "count": 43477
+        },
+        {
+          "severity": "Moderate",
+          "mortality": "Minor",
+          "count": 421265
+        },
+        {
+          "severity": "Minor",
+          "mortality": "Minor",
+          "count": 587386
+        },
+        {
+          "severity": "Major",
+          "mortality": "Major",
+          "count": 273537
+        },
+        {
+          "severity": "Major",
+          "mortality": "Moderate",
+          "count": 126365
+        },
+        {
+          "severity": "Moderate",
+          "mortality": "Moderate",
+          "count": 262815
+        },
+        {
+          "severity": "Major",
+          "mortality": "Minor",
+          "count": 55179
+        },
+        {
+          "severity": "Extreme",
+          "mortality": "Major",
+          "count": 42439
+        },
+        {
+          "severity": "Minor",
+          "mortality": "Moderate",
+          "count": 43961
+        },
+        {
+          "severity": "Extreme",
+          "mortality": "Extreme",
+          "count": 153598
+        },
+        {
+          "severity": "Moderate",
+          "mortality": "Major",
+          "count": 74321
+        },
+        {
+          "severity": "Moderate",
+          "mortality": "Extreme",
+          "count": 859
+        },
+        {
+          "severity": "Extreme",
+          "mortality": "Moderate",
+          "count": 3361
+        },
+        {
+          "severity": "Minor",
+          "mortality": "Major",
+          "count": 3287
+        },
+        {
+          "severity": "Unknown",
+          "mortality": "Unknown",
+          "count": 2548
+        },
+        {
+          "severity": "Extreme",
+          "mortality": "Minor",
+          "count": 965
+        },
+        {
+          "severity": "Minor",
+          "mortality": "Extreme",
+          "count": 21
+        }
+      ]
+    }
+  },
+  "algorithms": {
+    "associationRulesPreview": [
+      {
+        "diagnosis": "LIVEBORN",
+        "procedure": "VACCINATIONS",
+        "count": 56549,
+        "support": 0.027
+      },
+      {
+        "diagnosis": "LIVEBORN",
+        "procedure": "CIRCUMCISION",
+        "count": 40625,
+        "support": 0.0194
+      },
+      {
+        "diagnosis": "CORONAVIRUS DISEASE 2019 (COVID-19)",
+        "procedure": "POTENTIAL COVID-19 THERAPIES",
+        "count": 36479,
+        "support": 0.0174
+      },
+      {
+        "diagnosis": "COMPLICATIONS SPECIFIED DURING CHILDBIRTH",
+        "procedure": "SPONTANEOUS VAGINAL DELIVERY",
+        "count": 27542,
+        "support": 0.0131
+      },
+      {
+        "diagnosis": "PREVIOUS C-SECTION",
+        "procedure": "CESAREAN SECTION",
+        "count": 21129,
+        "support": 0.0101
+      },
+      {
+        "diagnosis": "OSTEOARTHRITIS",
+        "procedure": "KNEE ARTHROPLASTY",
+        "count": 19054,
+        "support": 0.0091
+      },
+      {
+        "diagnosis": "CORONAVIRUS DISEASE 2019 (COVID-19)",
+        "procedure": "ISOLATION PROCEDURES",
+        "count": 16615,
+        "support": 0.0079
+      },
+      {
+        "diagnosis": "LIVEBORN",
+        "procedure": "DIAGNOSTIC AUDIOLOGY",
+        "count": 15887,
+        "support": 0.0076
+      },
+      {
+        "diagnosis": "ALCOHOL-RELATED DISORDERS",
+        "procedure": "SUBSTANCE USE DETOXIFICATION",
+        "count": 15723,
+        "support": 0.0075
+      },
+      {
+        "diagnosis": "SPONDYLOPATHIES/SPONDYLOARTHROPATHY (INCLUDING INFECTIVE)",
+        "procedure": "SPINE FUSION",
+        "count": 15029,
+        "support": 0.0072
+      },
+      {
+        "diagnosis": "OBESITY",
+        "procedure": "GASTRECTOMY",
+        "count": 14937,
+        "support": 0.0071
+      },
+      {
+        "diagnosis": "PROLONGED PREGNANCY",
+        "procedure": "SPONTANEOUS VAGINAL DELIVERY",
+        "count": 13819,
+        "support": 0.0066
+      }
+    ],
+    "costInsightPreview": {
+      "byAdmissionType": [
+        {
+          "name": "Emergency",
+          "dischargeCount": 1382048,
+          "avgCharges": 74708.43,
+          "avgCosts": 22264.96,
+          "avgLengthOfStay": 6.2
+        },
+        {
+          "name": "Elective",
+          "dischargeCount": 351673,
+          "avgCharges": 84732.86,
+          "avgCosts": 26114.64,
+          "avgLengthOfStay": 4.5
+        },
+        {
+          "name": "Newborn",
+          "dischargeCount": 194818,
+          "avgCharges": 35393.46,
+          "avgCosts": 9166.22,
+          "avgLengthOfStay": 3.4
+        },
+        {
+          "name": "Urgent",
+          "dischargeCount": 157995,
+          "avgCharges": 81548.96,
+          "avgCosts": 26190.75,
+          "avgLengthOfStay": 6.3
+        },
+        {
+          "name": "Trauma",
+          "dischargeCount": 7688,
+          "avgCharges": 125529.28,
+          "avgCosts": 32408.5,
+          "avgLengthOfStay": 6.6
+        },
+        {
+          "name": "Not Available",
+          "dischargeCount": 1162,
+          "avgCharges": 64681.6,
+          "avgCosts": 20754.7,
+          "avgLengthOfStay": 6.7
+        }
+      ],
+      "bySeverity": [
+        {
+          "name": "Major",
+          "dischargeCount": 498558,
+          "avgCharges": 90492.13
+        },
+        {
+          "name": "Moderate",
+          "dischargeCount": 759260,
+          "avgCharges": 54680.03
+        },
+        {
+          "name": "Minor",
+          "dischargeCount": 634655,
+          "avgCharges": 36819.55
+        },
+        {
+          "name": "Extreme",
+          "dischargeCount": 200363,
+          "avgCharges": 218154.72
+        },
+        {
+          "name": "Unknown",
+          "dischargeCount": 2548,
+          "avgCharges": 62382.61
+        }
+      ],
+      "byMortalityRisk": [
+        {
+          "name": "Extreme",
+          "dischargeCount": 197955,
+          "avgCharges": 198395.65
+        },
+        {
+          "name": "Minor",
+          "dischargeCount": 1064795,
+          "avgCharges": 43493.57
+        },
+        {
+          "name": "Major",
+          "dischargeCount": 393584,
+          "avgCharges": 97861.59
+        },
+        {
+          "name": "Moderate",
+          "dischargeCount": 436502,
+          "avgCharges": 67829.88
+        },
+        {
+          "name": "Unknown",
+          "dischargeCount": 2548,
+          "avgCharges": 62382.61
+        }
+      ]
+    },
+    "readmissionRiskProxy": {
+      "distribution": [
+        {
+          "name": "Medium",
+          "value": 727597
+        },
+        {
+          "name": "High",
+          "value": 585416
+        },
+        {
+          "name": "Critical",
+          "value": 498099
+        },
+        {
+          "name": "Low",
+          "value": 284272
+        }
+      ],
+      "factors": [
+        "年龄段越高，基础风险分层越高",
+        "急诊/创伤入院会抬升风险等级",
+        "病情严重程度、死亡风险等级越高，风险权重越高",
+        "住院时长较长且非家庭出院人群风险更高"
+      ]
+    }
+  },
+  "quality": {
+    "summary": {
+      "rawRows": 2101588,
+      "cleanRows": 2095384,
+      "duplicateRowsRemoved": 6204,
+      "dedupRate": 0.295,
+      "overallCellCompleteness": 90.51,
+      "keyFieldCompleteness": 100.0,
+      "processingSeconds": 97.33,
+      "normalizedFieldCount": 31
+    },
+    "topMissingFields": [
+      {
+        "field": "birth_weight",
+        "missing": 1891641,
+        "missingRate": 90.28
+      },
+      {
+        "field": "payment_typology_3",
+        "missing": 1764142,
+        "missingRate": 84.19
+      },
+      {
+        "field": "payment_typology_2",
+        "missing": 1068627,
+        "missingRate": 51.0
+      },
+      {
+        "field": "ccsr_procedure_code",
+        "missing": 572942,
+        "missingRate": 27.34
+      },
+      {
+        "field": "ccsr_procedure_description",
+        "missing": 572942,
+        "missingRate": 27.34
+      },
+      {
+        "field": "ethnicity",
+        "missing": 198335,
+        "missingRate": 9.47
+      },
+      {
+        "field": "zip_code_3_digits",
+        "missing": 45047,
+        "missingRate": 2.15
+      },
+      {
+        "field": "operating_certificate_number",
+        "missing": 12082,
+        "missingRate": 0.58
+      },
+      {
+        "field": "hospital_county",
+        "missing": 10633,
+        "missingRate": 0.51
+      },
+      {
+        "field": "hospital_service_area",
+        "missing": 10633,
+        "missingRate": 0.51
+      },
+      {
+        "field": "permanent_facility_id",
+        "missing": 10633,
+        "missingRate": 0.51
+      },
+      {
+        "field": "apr_risk_of_mortality",
+        "missing": 2548,
+        "missingRate": 0.12
+      }
+    ],
+    "keyFieldDistributions": {
+      "gender": {
+        "Female": 1141993,
+        "Male": 953235,
+        "Unknown": 156
+      },
+      "payment_typology_1": {
+        "Medicare": 824508,
+        "Medicaid": 643810,
+        "Private Health Insurance": 306334,
+        "Blue Cross/Blue Shield": 223277,
+        "Managed Care, Unspecified": 28210,
+        "Self-Pay": 27063,
+        "Miscellaneous/Other": 22419,
+        "Federal/State/Local/VA": 18529,
+        "Department of Corrections": 1234
+      },
+      "age_group": {
+        "70 or Older": 618253,
+        "50 to 69": 583432,
+        "30 to 49": 415210,
+        "0 to 17": 286670,
+        "18 to 29": 191819
+      },
+      "type_of_admission": {
+        "Emergency": 1382048,
+        "Elective": 351673,
+        "Newborn": 194818,
+        "Urgent": 157995,
+        "Trauma": 7688,
+        "Not Available": 1162
+      },
+      "emergency_department_indicator": {
+        "Y": 1313531,
+        "N": 781853
+      }
+    },
+    "processingRules": [
+      {
+        "step": "column_normalization",
+        "what": "统一列名为小写下划线（snake_case）",
+        "why": "消除原始列名中的空格/连字符/括号差异，保证全链路字段名一致"
+      },
+      {
+        "step": "string_trim_and_unknown",
+        "what": "文本/分类字段去空白、折叠空白，缺失统一填充为 'Unknown'",
+        "why": "避免 'Male '/'Male' 被当成两个值；统一缺失哨兵便于过滤与统计"
+      },
+      {
+        "step": "code_preserve_leading_zero",
+        "what": "编码/标识字段保留字符串原样（含前导零），缺失填 'Unknown'",
+        "why": "机构号/DRG/MDC/邮编等是编码而非测量值，前导零有意义，不能转数值"
+      },
+      {
+        "step": "numeric_conversion",
+        "what": "整数/金额字段去逗号转数值，失败置 NaN",
+        "why": "金额带千分位逗号且为字符串，不转数值无法求和/建模"
+      },
+      {
+        "step": "gender_and_yn_mapping",
+        "what": "性别 M/F/U -> Male/Female/Unknown；急诊标志只保留 Y/N",
+        "why": "统一取值域，避免缩写/大小写混用导致统计分裂"
+      },
+      {
+        "step": "global_deduplication",
+        "what": "用整行哈希跨分块去重",
+        "why": "去掉完全重复的住院记录，避免重复统计；跨块去重比单块内更彻底"
+      }
+    ]
+  },
+  "api": {
+    "baseUrl": "http://127.0.0.1:5000/api/v1",
+    "endpoints": [
+      {
+        "name": "健康检查",
+        "method": "GET",
+        "path": "/health"
+      },
+      {
+        "name": "维度元数据",
+        "method": "GET",
+        "path": "/meta/dimensions"
+      },
+      {
+        "name": "指标元数据",
+        "method": "GET",
+        "path": "/meta/metrics"
+      },
+      {
+        "name": "算法元数据",
+        "method": "GET",
+        "path": "/meta/algorithms"
+      },
+      {
+        "name": "多维聚合分析",
+        "method": "POST",
+        "path": "/aggregations/run"
+      },
+      {
+        "name": "统计指标算法",
+        "method": "POST",
+        "path": "/algorithms/statistics/run"
+      },
+      {
+        "name": "关联分析算法",
+        "method": "POST",
+        "path": "/algorithms/association/run"
+      },
+      {
+        "name": "住院费用预测",
+        "method": "POST",
+        "path": "/algorithms/cost_prediction/run"
+      },
+      {
+        "name": "再入院风险评分",
+        "method": "POST",
+        "path": "/algorithms/readmission_risk/run"
+      }
+    ]
+  }
+}

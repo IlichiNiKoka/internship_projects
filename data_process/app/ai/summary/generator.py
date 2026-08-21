@@ -166,17 +166,35 @@ class SummaryGenerator:
                     params["support"] = self._get(top, "support") or 0
                     params["confidence"] = self._get(top, "confidence") or 0
                 else:
-                    params["top_rule"] = "无规则"
-                    params["support"] = 0
-                    params["confidence"] = 0
+                    params["mode"] = "empty"
             elif intent_key == "cost_prediction":
-                params["mae"] = self._get(result, "mae") or 0
-                params["r2"] = self._get(result, "r2") or 0
-                params["predicted_charge"] = self._get(result, "predicted_charge") or 0
+                mode = self._get(result, "mode")
+                params["mode"] = mode
+                if mode == "train":
+                    for key in ("mae", "rmse", "r2"):
+                        value = self._get(result, key)
+                        if value is not None:
+                            params[key] = value
+                elif mode == "predict":
+                    value = self._get(result, "predicted_charge")
+                    if value is not None:
+                        params["predicted_charge"] = value
+                    params["currency"] = self._get(result, "currency") or "USD"
             elif intent_key == "readmission_risk":
-                params["high_risk_rate"] = self._get(result, "high_risk_rate") or 0
-                params["top_group"] = self._get(result, "top_risk_group") or "未知人群"
-                params["predicted_risk"] = self._get(result, "predicted_risk") or 0
+                mode = self._get(result, "mode")
+                params["mode"] = mode
+                if mode == "profile":
+                    rate = self._get(result, "high_risk_rate")
+                    if rate is not None:
+                        params["high_risk_rate"] = rate
+                    params["top_group"] = self._get(
+                        result, "top_risk_group"
+                    ) or "未知人群"
+                elif mode == "score":
+                    score = self._get(result, "risk_score")
+                    if score is not None:
+                        params["risk_score"] = score
+                    params["risk_level"] = self._get(result, "risk_level") or "Unknown"
             elif intent_key == "metadata_query":
                 item_count = 0
                 if isinstance(result, dict):

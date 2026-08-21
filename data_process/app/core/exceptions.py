@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
-"""业务异常体系：所有可预期错误统一抛 BizException 子类，
-由中间件按错误码表转换为标准 JSON 响应（见 core/middleware.py）。
+"""业务异常体系。
+
+所有可预期错误统一抛出 ``BizException`` 子类，由中间件转换为
+标准 JSON 响应。
 """
 
 from __future__ import annotations
@@ -25,10 +27,14 @@ class BizException(Exception):
 
 # ---- 4xx：参数/资源类 ----
 class ParamValidationError(BizException):
-    """请求参数结构校验失败（marshmallow 校验消息走 detail）。"""
+    """请求参数结构校验失败。"""
 
     def __init__(self, detail: object = None, message: str | None = None):
-        super().__init__(ErrorCode.PARAM_VALIDATION_ERROR, message, detail)
+        super().__init__(
+            ErrorCode.PARAM_VALIDATION_ERROR,
+            message or "参数校验失败",
+            detail,
+        )
 
 
 class InvalidDimensionError(ParamValidationError):
@@ -57,6 +63,20 @@ class ResourceNotFoundError(BizException):
         super().__init__(ErrorCode.NOT_FOUND, message)
 
 
+class ConflictError(BizException):
+    """资源已被并发更新，当前快照不能继续提交。"""
+
+    def __init__(self, message: str | None = None, detail: object = None):
+        super().__init__(ErrorCode.CONFLICT, message, detail)
+
+
+class TooManyRequestsError(BizException):
+    """资源正在被另一个请求处理，调用方应稍后重试。"""
+
+    def __init__(self, message: str | None = None, detail: object = None):
+        super().__init__(ErrorCode.TOO_MANY_REQUESTS, message, detail)
+
+
 class AlgorithmNotFoundError(BizException):
     def __init__(self, name: str):
         super().__init__(
@@ -71,7 +91,11 @@ class ComputationError(BizException):
     """Spark 计算任务失败。"""
 
     def __init__(self, message: str | None = None, detail: object = None):
-        super().__init__(ErrorCode.COMPUTATION_ERROR, message, detail)
+        super().__init__(
+            ErrorCode.COMPUTATION_ERROR,
+            message or "大数据计算任务执行失败",
+            detail,
+        )
 
 
 class ServiceUnavailableError(BizException):

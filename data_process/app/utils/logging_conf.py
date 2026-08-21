@@ -30,9 +30,11 @@ def configure_logging(settings: Settings) -> None:
     root.setLevel(settings.log_level.upper())
 
     formatter = logging.Formatter(_FORMAT)
+    trace_filter = TraceIdFilter()
 
     console = logging.StreamHandler(sys.stdout)
     console.setFormatter(formatter)
+    console.addFilter(trace_filter)   # 挂到 handler 上，子 logger 记录同样生效
     root.addHandler(console)
 
     try:
@@ -44,10 +46,10 @@ def configure_logging(settings: Settings) -> None:
             encoding="utf-8",
         )
         file_handler.setFormatter(formatter)
+        file_handler.addFilter(trace_filter)
         root.addHandler(file_handler)
     except OSError:  # 日志目录不可写时仅降级到控制台
         logging.getLogger(__name__).warning("日志目录不可写，仅输出到控制台: %s",
                                             settings.log_dir)
 
-    root.addFilter(TraceIdFilter())
     root._analytics_configured = True  # type: ignore[attr-defined]

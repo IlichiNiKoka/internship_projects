@@ -13,12 +13,14 @@ if TYPE_CHECKING:  # 仅类型标注用，避免循环导入
     from app.data.data_provider import DataProvider
     from app.core.cache import CacheBackend
     from config.settings import Settings
+    from app.application.service import MedicalAssistantService
 
 
 class _Extensions:
     settings: "Settings | None" = None
     data_provider: "DataProvider | None" = None
     cache: "CacheBackend | None" = None
+    application_service: "MedicalAssistantService | None" = None
 
 
 ext = _Extensions()

@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 from dataclasses import MISSING, dataclass, fields
 from pathlib import Path
+from typing import get_type_hints
 
 from dotenv import load_dotenv
 
@@ -81,15 +82,49 @@ class Settings:
     # Base URL 留空时：provider=deepseek 用 https://api.deepseek.com/v1；
     # provider=openai 用官方；自建/本地 LLM 在 .env 显式填 http://localhost:8000/v1
     llm_base_url: str = ""
-    # 默认模型：DeepSeek-V3（OpenAI 兼容接口）。可改为 deepseek-reasoner（R1）或 gpt-4o-mini 等
-    llm_model: str = "deepseek-chat"
+    # 默认模型：DeepSeek V4 Flash（OpenAI 兼容接口）。
+    # 旧名 deepseek-chat / deepseek-reasoner 已于 2026-07-24 弃用；
+    # 也可改为 deepseek-v4-pro 或 gpt-4o-mini 等其他 OpenAI 兼容模型
+    llm_model: str = "deepseek-v4-flash"
     llm_timeout: int = 30                  # 单次 LLM 调用超时（秒）
     llm_temperature: float = 0.2           # 低温度减少幻觉
-    llm_max_tokens: int = 800              # 文本生成最大 token
+    llm_max_tokens: int = 4000          # 文本生成最大 token（含思考内容；deepseek-v4-flash 会先输出 reasoning，预算过小会导致 content 为空）
     # 意图识别：达标阈值（低于此值时分类器输出 unsupported）
     intent_min_confidence: float = 0.45
     # 文本生成幻觉检查：原文数字与生成文本数字允许的相对误差
     hallucination_tolerance: float = 0.02
+
+    # ---- AI 应用编排（人员1：工具 / 会话 / 报告）----
+    # 单体默认进程内调用人员3服务；拆分部署可切换 http。
+    analysis_api_mode: str = "local"        # local / http
+    analysis_api_base_url: str = ""          # http 模式必填
+    analysis_api_key: str = ""               # 可选服务间凭证，不写入会话/报告
+    analysis_api_timeout: float = 30.0
+    # 对前端暴露的 /assistant 共享访问凭证；开发环境可留空，
+    # 生产环境必须配置，支持 Bearer 或 X-Assistant-API-Key。
+    assistant_api_key: str = ""
+
+    tool_max_attempts: int = 3
+    tool_retry_base_seconds: float = 0.1
+    tool_retry_max_seconds: float = 1.0
+
+    # 开发无 Redis 地址时使用有界内存；生产环境由构建器强制 Redis。
+    conversation_backend: str = "auto"       # auto / memory / redis
+    conversation_ttl_seconds: int = 86_400
+    conversation_max_sessions: int = 1_000
+    conversation_max_messages: int = 100
+    conversation_max_analyses: int = 20
+    conversation_max_reports: int = 10
+    conversation_max_result_rows: int = 200
+    redis_url: str = ""
+    redis_key_prefix: str = "medical:conversation:"
+    redis_socket_timeout: float = 1.0
+    # 分布式会话锁必须覆盖最慢的 Spark/LLM 任务，并在持锁期间定期续租。
+    conversation_lock_timeout_seconds: float = 900.0
+    conversation_lock_blocking_timeout_seconds: float = 30.0
+    conversation_lock_renew_interval_seconds: float = 60.0
+
+    report_max_analyses: int = 10
 
     # ---- 日志 ----
     log_dir: Path = LOG_DIR_DEFAULT
@@ -102,6 +137,9 @@ class Settings:
         load_dotenv(BASE_DIR / ".env", override=False)
 
         kwargs: dict = {}
+        # ``from __future__ import annotations`` 会让 Field.type 可能是字符串；
+        # 先解析真实类型，确保端口、TTL、布尔值等环境变量不会错误保留为 str。
+        type_hints = get_type_hints(cls)
         for f in fields(cls):
             raw = os.environ.get(f"ANALYTICS_{f.name.upper()}")
             if raw is None:
@@ -112,13 +150,14 @@ class Settings:
                 default = f.default_factory()
             else:
                 default = None
-            if f.type is bool:
+            target_type = type_hints.get(f.name, f.type)
+            if target_type is bool:
                 kwargs[f.name] = _parse_bool(raw, bool(default))
-            elif f.type is int:
+            elif target_type is int:
                 kwargs[f.name] = int(raw)
-            elif f.type is float:
+            elif target_type is float:
                 kwargs[f.name] = float(raw)
-            elif f.type is Path:
+            elif target_type is Path:
                 kwargs[f.name] = Path(raw)
             else:
                 kwargs[f.name] = raw

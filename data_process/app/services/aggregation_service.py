@@ -207,7 +207,7 @@ class AggregationService:
                     message=f"过滤字段不在白名单: {field}",
                 )
 
-            if value_type == "number":
+            if value_type in {"number", "integer", "double"}:
                 allowed_ops = {"eq", "ne", "in", "not_in", "gte", "gt", "lte", "lt", "between"}
             else:
                 allowed_ops = STRING_FILTER_OPS

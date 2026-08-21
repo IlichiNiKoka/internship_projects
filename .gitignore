@@ -3,21 +3,18 @@
 # ============================================================
 
 # ------------------------------
-# 1. 数据目录（保留目录结构，但忽略其中自动生成的数据文件）
+# 1. 数据文件（大体积医疗 CSV / 中间产物）
 # ------------------------------
-# raw/ 与 processed/ 目录本身通过 .gitkeep 保留进 git；
-# 但其中所有 csv / tsv / json / 压缩包均为脚本自动生成的大体积数据，不入库
-data_process/raw/**/*.csv
-data_process/raw/**/*.tsv
-data_process/raw/**/*.json
-data_process/raw/**/*.rar
-data_process/raw/**/*.zip
-data_process/raw/**/*.7z
-!data_process/raw/.gitkeep
+# 原始解压数据（~794 MB，210 万行）
+data_process/raw/*.csv
+data_process/raw/*.tsv
+data_process/raw/*.rar
+data_process/raw/*.zip
+data_process/raw/*.7z
 
-data_process/processed/**/*.csv
-data_process/processed/**/*.json
-!data_process/processed/.gitkeep
+# 清洗后输出数据（~817 MB）与处理报告（脚本自动生成）
+data_process/processed/*_clean.csv
+data_process/processed/processing_report.json
 
 # ------------------------------
 # 2. Python 编译产物与字节码
