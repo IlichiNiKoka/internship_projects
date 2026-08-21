@@ -38,7 +38,10 @@ def _service() -> AIService:
         )
     if svc._algorithm is None:
         from app.services.algorithm_service import AlgorithmService
-        svc._algorithm = AlgorithmService(provider=ext.data_provider)
+        svc._algorithm = AlgorithmService(
+            provider=ext.data_provider,
+            timeout_seconds=ext.settings.algo_timeout_seconds,
+        )
     return svc
 
 
