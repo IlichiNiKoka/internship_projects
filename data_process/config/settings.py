@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import os
+import typing
 from dataclasses import MISSING, dataclass, fields
 from pathlib import Path
 
@@ -121,24 +122,23 @@ class Settings:
         """从 .env 与环境变量加载配置。"""
         load_dotenv(BASE_DIR / ".env", override=False)
 
+        # 文件顶部 `from __future__ import annotations` 会把字段注解变成字符串，
+        # 因此必须用 get_type_hints 解析真实类型，否则 bool/int/float/Path 全判为 str
+        type_hints = typing.get_type_hints(cls)
+
         kwargs: dict = {}
         for f in fields(cls):
             raw = os.environ.get(f"ANALYTICS_{f.name.upper()}")
             if raw is None:
                 continue
-            if f.default is not MISSING:
-                default = f.default
-            elif f.default_factory is not MISSING:
-                default = f.default_factory()
-            else:
-                default = None
-            if f.type is bool:
-                kwargs[f.name] = _parse_bool(raw, bool(default))
-            elif f.type is int:
+            ftype = type_hints.get(f.name)
+            if ftype is bool:
+                kwargs[f.name] = _parse_bool(raw, False)
+            elif ftype is int:
                 kwargs[f.name] = int(raw)
-            elif f.type is float:
+            elif ftype is float:
                 kwargs[f.name] = float(raw)
-            elif f.type is Path:
+            elif ftype is Path:
                 kwargs[f.name] = Path(raw)
             else:
                 kwargs[f.name] = raw
