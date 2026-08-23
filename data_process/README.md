@@ -1,13 +1,15 @@
 # 医养项目数据处理与分析
 
-本目录包含两个相互衔接的子系统：
+本目录包含四个相互衔接的子系统：
 
 1. **数据清洗流水线**（根目录脚本）：对 SPARCS 2021 住院出院数据
    （约 832 MB / 2,101,588 行）进行标准化清洗，产出统一字段类型、统一取值域、
    去重后的高质量 CSV，作为下游分析服务的唯一数据源。
 2. **大数据分析服务**（`app/` 子目录）：基于 Flask + PySpark 的 REST 服务，
    对清洗后数据提供多维度聚合、统计指标、关联分析、住院费用预测、再入院风险评估等接口，
-   供上层 AI 智能层（人员4）调用。
+   供上层 AI 智能层与应用编排层调用。
+3. **AI 智能层**（`app/ai/`，人员4）：意图识别与分析结果摘要生成。
+4. **AI 应用编排层**（`app/application/`，人员1）：智能工具调用、Redis/LangChain 多轮会话、历史结果引用与结构化洞察报告。
 
 > 需求来源：`processing_reason.txt`（清洗）与 `docs/markdown/需求文档.md`（分析服务）。
 
@@ -33,7 +35,7 @@
 ```
 data_process/
 ├── README.md                # 本文件：项目说明
-├── requirements.txt         # 统一依赖清单（数据清洗 + 分析服务）
+├── requirements.txt         # 转发到仓库根统一依赖清单
 ├── .env.example             # 分析服务环境变量示例
 ├── pytest.ini               # 测试配置
 ├── run.py                   # 分析服务开发入口（python run.py）
@@ -68,7 +70,7 @@ data_process/
 ## 3. 环境与依赖
 
 - Python ≥ 3.12
-- 依赖：pandas、Flask、marshmallow、python-dotenv、pyspark、pytest
+- 依赖：pandas、Flask、marshmallow、python-dotenv、pyspark、openai、langchain-core、redis、pytest
 - Java 8 / 11 / 17（Spark 3.5.1 要求，推荐 17）
 
 安装依赖（建议在虚拟环境中）：
@@ -122,6 +124,10 @@ gunicorn -w 2 -b 0.0.0.0:5000 wsgi:app --timeout 120
 - `GET  /api/v1/meta/performance` — 接口性能监控（二期：耗时/慢查询/错误分布）
 - `POST /api/v1/aggregations/run` — 多维度聚合（二期支持 `page`/`page_size` 分页）
 - `POST /api/v1/algorithms/<name>/run` — 算法执行（statistics/association/cost_prediction/readmission_risk 等）
+- `POST /api/v1/assistant/chat` — 有状态医疗分析对话
+- `GET  /api/v1/assistant/sessions/<session_id>` — 恢复会话历史
+- `POST /api/v1/assistant/sessions/<session_id>/reports` — 生成医疗洞察报告
+- `GET  /api/v1/assistant/tools` — 工具与 LangChain 注册状态
 
 ### 4.3 测试
 

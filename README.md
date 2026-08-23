@@ -23,7 +23,9 @@ internship_projects/
 │
 ├── docs/                          # 需求与分工文档（全部已转为 Markdown）
 │   ├── 人员分工.md                 # 团队角色、技术功能分配、协作链路
-│   ├── 人员1/                      # 项目经理 / AI 应用开发（二期功能，文档待补）
+│   ├── 人员1/                      # 项目经理 / AI 应用开发
+│   │   ├── 人员1-AI应用编排需求与接口.md
+│   │   └── 人员1-前端调用指南.md
 │   ├── 人员2/                      # 数据预处理与持久化
 │   │   ├── 人员2-数据预处理与持久化模块需求.md
 │   │   └── 人员2-软件需求规约-功能设计.md
@@ -94,17 +96,18 @@ internship_projects/
 | 数据接入、清洗、入库、质量、备份 | 人员2 | [docs/人员2/人员2-数据预处理与持久化模块需求.md](docs/人员2/人员2-数据预处理与持久化模块需求.md)<br>[docs/人员2/人员2-软件需求规约-功能设计.md](docs/人员2/人员2-软件需求规约-功能设计.md) |
 | 分析指标、算法、API、缓存和异常 | 人员3 | [docs/人员3/人员3-软件需求规约-功能设计.md](docs/人员3/人员3-软件需求规约-功能设计.md) |
 | 意图识别、预测模型、LLM 部署 | 人员4 | [docs/人员4/人员4需求文档.md](docs/人员4/人员4需求文档.md)<br>[docs/人员4/人员4用例图文字图例.md](docs/人员4/人员4用例图文字图例.md)<br>[docs/人员4/人员4流程图文字图例.md](docs/人员4/人员4流程图文字图例.md) |
-| AI 工具调用、多轮对话、报告生成 | 人员1 | 二期功能，文档待补 |
+| AI 工具调用、多轮对话、报告生成 | 人员1 | [需求与接口](docs/人员1/人员1-AI应用编排需求与接口.md)；[前端调用指南](docs/人员1/人员1-前端调用指南.md) |
 
 ---
 
 ## 四、代码实现说明
 
-代码集中位于 [data_process/](data_process/)，由三个相互衔接的子系统组成：
+代码集中位于 [data_process/](data_process/)，由四个相互衔接的子系统组成：
 
 1. **数据清洗流水线**（根目录脚本，人员2）：对 SPARCS 2021 数据进行分块读取、清洗、标准化、跨块去重，产出统一字段类型、统一取值域、去重后的高质量 CSV，作为下游分析服务的唯一数据源。
 2. **大数据分析服务**（`app/` 子目录，人员3）：基于 Flask + PySpark 的 REST 服务，对清洗后数据提供多维度聚合、统计指标、关联分析、住院费用预测、再入院风险评估等接口，供上层 AI 智能层（人员1 / 人员4）调用。
 3. **AI 智能层**（`app/ai/` 子目录，人员4）：自然语言意图识别（≥90% 准确率）+ 分析结果文本生成（DeepSeek/OpenAI 兼容 + Mock 降级 + 幻觉检查）+ 意图识别优化（模糊 / 多维度 / 医疗术语联想），通过 `app/api/v1/ai.py` 对外暴露 REST 接口。
+4. **AI 应用编排层**（`app/application/` 子目录，人员1）：LangChain Tool 注册、意图到分析能力映射、参数转换/重试/结果组装、Redis/LangChain 多轮记忆、历史分析引用和结构化医疗洞察报告，通过 `app/api/v1/application.py` 面向前端提供有状态接口。
 
 ### 4.1 数据清洗流水线（人员2）
 
@@ -237,7 +240,7 @@ internship_projects/
 **依赖**
 
 - Python ≥ 3.12
-- 依赖：pandas、Flask、marshmallow、python-dotenv、pyspark、pytest（详见 [data_process/requirements.txt](data_process/requirements.txt)）
+- 依赖：pandas、Flask、marshmallow、python-dotenv、pyspark、openai、langchain-core、redis、pytest（详见 [data_process/requirements.txt](data_process/requirements.txt)）
 - Java 8 / 11 / 17（Spark 3.5.1 要求，推荐 17；`app/utils/spark.py` 跨平台自动探测）
 
 **安装与运行**
@@ -277,6 +280,10 @@ python scripts/smoke_test.py
 - `POST /api/v1/ai/intent` — 自然语言意图识别（仅识别不调用下游）
 - `POST /api/v1/ai/summary` — 分析结果文本生成（已有 analysis_result）
 - `POST /api/v1/ai/execute` — 端到端（意图识别 → 下游调用 → 文本生成）
+- `POST /api/v1/assistant/chat` — 人员1有状态对话（工具调用 → 上下文 → 摘要/报告）
+- `GET  /api/v1/assistant/sessions/<session_id>` — 恢复会话历史
+- `POST /api/v1/assistant/sessions/<session_id>/reports` — 生成多分析洞察报告
+- `GET  /api/v1/assistant/tools` — 工具与 LangChain 注册状态
 
 ### 4.5 AI 智能层（人员4）
 
@@ -306,14 +313,30 @@ python scripts/smoke_test.py
 - 切换到 OpenAI：`ANALYTICS_LLM_PROVIDER=openai` + `ANALYTICS_LLM_MODEL=gpt-4o-mini`
 - 切换到本地 vLLM：`ANALYTICS_LLM_BASE_URL=http://localhost:8000/v1` + `ANALYTICS_LLM_API_KEY=dummy`
 
-### 4.6 二期规划（仓库尚未实现）
+### 4.6 AI 应用编排层（人员1）
+
+| 文件 | 职责 |
+|---|---|
+| [data_process/app/application/tools.py](data_process/app/application/tools.py) | 六类医疗工具白名单、LangChain `StructuredTool` 注册、参数转换、瞬态错误重试与结果组装 |
+| [data_process/app/application/clients.py](data_process/app/application/clients.py) | 人员3分析能力客户端：单体进程内调用与拆分部署 HTTP 调用 |
+| [data_process/app/application/memory.py](data_process/app/application/memory.py) | 有界内存/Redis 会话存储、同会话锁与 LangChain Memory 兼容适配 |
+| [data_process/app/application/service.py](data_process/app/application/service.py) | 会话流程编排、追问参数继承、历史分析引用、幂等请求和失败降级 |
+| [data_process/app/application/reports.py](data_process/app/application/reports.py) | 单次/多次分析报告模板、摘要校验、指标卡/表格/中立图表规格和来源追踪 |
+| [data_process/app/api/v1/application.py](data_process/app/api/v1/application.py) | `/api/v1/assistant/*` 前端接口 |
+| [data_process/tests/test_application.py](data_process/tests/test_application.py) | 不依赖 Spark/Redis/网络的人员1离线单元测试 |
+| [data_process/tests/test_application_regressions.py](data_process/tests/test_application_regressions.py) | 人员1结果语义、并发会话、幂等、鉴权与异常路径回归测试 |
+
+需求、配置与验收规则见 [人员1需求与接口](docs/人员1/人员1-AI应用编排需求与接口.md)；
+前端调用、状态处理和报告渲染见 [人员1前端调用指南](docs/人员1/人员1-前端调用指南.md)。
+
+### 4.7 后续规划
 
 | 模块 | 规划内容 | 主责人 |
 |---|---|---|
 | 数据底座 | 数据质量评估（4 维度评分 + 可视化报告）、数据备份与恢复、大数据增量更新（MySQL / HDFS 入库） | 人员2 |
 | 分析服务 | 接入 Redis 替换进程内缓存；接入 MySQL / HDFS 数据底座；扩展 `DataProvider` 子类 | 人员3 |
 | AI 模型 | ✅ 基础自然语言意图识别（准确率 ≥ 90%，已实现 [classifier.py](data_process/app/ai/intent/classifier.py)）+ ✅ 意图识别优化（模糊 / 多维 / 医疗术语联想，已实现 [terms.py](data_process/app/ai/intent/terms.py)）+ ✅ 分析结果文本生成（DeepSeek/OpenAI 兼容 + Mock 降级 + 幻觉检查，已实现 [generator.py](data_process/app/ai/summary/generator.py)）；⏳ LLM 本地化部署（Qwen / BaiChuan + FastAPI，尚未实现） | 人员4 |
-| AI 应用 | 智能工具调用（LangChain Tool 注册 + 意图-API 映射 + 重试）、多轮对话（会话 ID + Redis/LangChain Memory）、医疗洞察报告生成 | 人员1 |
+| AI 应用 | ✅ 智能工具调用、✅ 多轮对话、✅ 医疗洞察报告生成、✅ 可配置 API 凭证已实现；后续补多用户 RBAC 与真实前端联调 | 人员1 |
 | 前端 | 大屏可视化（ECharts KPI / 联动 / 下载）、Web 聊天界面（自然语言 + 图表展示）、可视化进阶（3D / 地图 / 时序） | 人员5 |
 | 独立测试 | 覆盖全部 23 项功能的集成测试、端到端测试、模型测试集与发布建议 | 人员5 |
 
