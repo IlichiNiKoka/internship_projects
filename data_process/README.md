@@ -120,7 +120,9 @@ gunicorn -w 2 -b 0.0.0.0:5000 wsgi:app --timeout 120
 - `GET  /api/v1/meta/dimensions` — 22 个可用维度
 - `GET  /api/v1/meta/metrics` — 9 个聚合指标
 - `GET  /api/v1/meta/algorithms` — 已注册算法
-- `POST /api/v1/aggregations/run` — 多维度聚合
+- `GET  /api/v1/meta/cache` — 缓存运行状态
+- `GET  /api/v1/meta/performance` — 接口性能监控（二期：耗时/慢查询/错误分布）
+- `POST /api/v1/aggregations/run` — 多维度聚合（二期支持 `page`/`page_size` 分页）
 - `POST /api/v1/algorithms/<name>/run` — 算法执行（statistics/association/cost_prediction/readmission_risk 等）
 - `POST /api/v1/assistant/chat` — 有状态医疗分析对话
 - `GET  /api/v1/assistant/sessions/<session_id>` — 恢复会话历史
@@ -133,6 +135,20 @@ gunicorn -w 2 -b 0.0.0.0:5000 wsgi:app --timeout 120
 pytest                  # 全部用例
 pytest -m "not spark"   # 跳过依赖 Spark 的用例
 ```
+
+### 4.4 二期功能（3.3.4 API 性能优化 / 3.3.5 API 异常处理机制）
+
+| 能力 | 实现 | 说明 |
+|---|---|---|
+| Redis 缓存 | `app/core/cache.py` `RedisCacheBackend` | `ANALYTICS_CACHE_BACKEND=redis` 切换；未安装 redis 包或连接失败时自动降级进程内缓存 |
+| 超时控制 | `app/core/timeout.py` | 聚合/算法计算在独立线程限时执行，超时抛 504 并丢弃结果 |
+| 大结果集分页 | 聚合请求新增 `page`/`page_size` | 响应含 `pagination`（page/page_size/returned/has_more），翻页口径参与缓存键 |
+| 慢查询告警 | `app/core/monitor.py` + 中间件 | 耗时超过 `ANALYTICS_SLOW_QUERY_THRESHOLD_SECONDS` 记入日志告警并汇总监控 |
+| Spark 任务参数优化 | `app/utils/spark.py` | 默认开启 Spark SQL AQE 自适应执行（可配置关闭） |
+| 权限控制 | 中间件统一守卫 | `ANALYTICS_API_AUTH_ENABLED=true` 后校验 `Authorization: Bearer <token>` / `X-API-Key`，缺 -> 401、错 -> 403 |
+| 限流 | `app/core/ratelimiter.py` | 滑动窗口按 Token/IP 计数，超限 -> 429 并回写 `Retry-After` 头 |
+| 请求体限制修复 | `app/core/error_codes.py` | 补充 413 错误码，超大请求体返回标准化 413 而非 500 |
+| 接口耗时监控 | `GET /api/v1/meta/performance` | 请求量、平均/最大耗时、慢查询明细、错误码分布、缓存状态 |
 
 ---
 

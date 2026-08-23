@@ -11,9 +11,9 @@
 from __future__ import annotations
 
 import os
+import typing
 from dataclasses import MISSING, dataclass, fields
 from pathlib import Path
-from typing import get_type_hints
 
 from dotenv import load_dotenv
 
@@ -53,17 +53,49 @@ class Settings:
     # ---- 数据源 ----
     data_csv_path: Path = DEFAULT_CLEAN_CSV
 
+    # ---- 结构化大数据入库（人员2 · 二期 MySQL / SQLite 兜底）----
+    # engine: auto(MySQL 优先，失败降级 SQLite) / mysql / sqlite
+    db_engine: str = "auto"
+    db_host: str = "127.0.0.1"
+    db_port: int = 3306
+    db_user: str = "root"
+    db_password: str = ""
+    db_name: str = "medical_analytics"
+    db_table: str = "sparcs_discharge_2021"
+    db_batch_size: int = 10000          # 每批写入行数（批量 INSERT，避免单条过慢）
+    db_sqlite_path: Path = DEFAULT_CLEAN_CSV.parent / "sparcs.db"  # SQLite 兜底文件
+
     # ---- Spark ----
     spark_master: str = "local[*]"          # 生产可改为 yarn / spark://...
     spark_log_level: str = "WARN"           # Spark 内部日志级别
     spark_driver_memory: str = "2g"
     spark_java_home: str = ""               # 留空自动探测（见 utils/spark.py）
     spark_shuffle_partitions: int = 8       # 本地模式无需过多分区
+    spark_adaptive_enabled: bool = True     # Spark SQL AQE 自适应执行（二期任务参数优化）
 
-    # ---- 结果缓存（一期：进程内 TTL 缓存；二期切换 Redis，接口不变）----
+    # ---- 结果缓存（一期：进程内 TTL 缓存；二期支持 Redis 后端）----
     cache_enabled: bool = True
+    cache_backend: str = "in-memory"       # in-memory / redis（redis 不可用时自动降级）
     cache_ttl_seconds: int = 300
     cache_max_entries: int = 256
+    redis_host: str = "127.0.0.1"
+    redis_port: int = 6379
+    redis_db: int = 0
+    redis_password: str = ""
+    redis_connect_timeout: float = 2.0     # 连接/读写超时（秒）
+
+    # ---- 超时与慢查询（二期 3.3.4 API 性能优化）----
+    agg_timeout_seconds: float = 120.0     # 聚合计算超时阈值，<=0 表示不限制
+    algo_timeout_seconds: float = 300.0    # 算法计算超时阈值，<=0 表示不限制
+    slow_query_threshold_seconds: float = 5.0  # 超过该耗时的请求记入慢查询并告警
+
+    # ---- 权限与限流（二期 3.3.5 API 异常处理机制）----
+    api_auth_enabled: bool = False         # 是否启用 API Token 认证
+    api_auth_tokens: str = ""              # 逗号分隔的合法 Token；启用认证但留空则拒绝所有请求
+    api_auth_public_paths: str = "/api/v1/health"  # 免认证路径前缀（逗号分隔）
+    rate_limit_enabled: bool = False       # 是否启用限流
+    rate_limit_requests: int = 100         # 滑动窗口内单个客户端允许的最大请求数
+    rate_limit_window_seconds: int = 60    # 滑动窗口长度（秒）
 
     # ---- 聚合接口限制 ----
     agg_default_limit: int = 100
@@ -82,49 +114,15 @@ class Settings:
     # Base URL 留空时：provider=deepseek 用 https://api.deepseek.com/v1；
     # provider=openai 用官方；自建/本地 LLM 在 .env 显式填 http://localhost:8000/v1
     llm_base_url: str = ""
-    # 默认模型：DeepSeek V4 Flash（OpenAI 兼容接口）。
-    # 旧名 deepseek-chat / deepseek-reasoner 已于 2026-07-24 弃用；
-    # 也可改为 deepseek-v4-pro 或 gpt-4o-mini 等其他 OpenAI 兼容模型
-    llm_model: str = "deepseek-v4-flash"
+    # 默认模型：DeepSeek-V3（OpenAI 兼容接口）。可改为 deepseek-reasoner（R1）或 gpt-4o-mini 等
+    llm_model: str = "deepseek-chat"
     llm_timeout: int = 30                  # 单次 LLM 调用超时（秒）
     llm_temperature: float = 0.2           # 低温度减少幻觉
-    llm_max_tokens: int = 4000          # 文本生成最大 token（含思考内容；deepseek-v4-flash 会先输出 reasoning，预算过小会导致 content 为空）
+    llm_max_tokens: int = 800              # 文本生成最大 token
     # 意图识别：达标阈值（低于此值时分类器输出 unsupported）
     intent_min_confidence: float = 0.45
     # 文本生成幻觉检查：原文数字与生成文本数字允许的相对误差
     hallucination_tolerance: float = 0.02
-
-    # ---- AI 应用编排（人员1：工具 / 会话 / 报告）----
-    # 单体默认进程内调用人员3服务；拆分部署可切换 http。
-    analysis_api_mode: str = "local"        # local / http
-    analysis_api_base_url: str = ""          # http 模式必填
-    analysis_api_key: str = ""               # 可选服务间凭证，不写入会话/报告
-    analysis_api_timeout: float = 30.0
-    # 对前端暴露的 /assistant 共享访问凭证；开发环境可留空，
-    # 生产环境必须配置，支持 Bearer 或 X-Assistant-API-Key。
-    assistant_api_key: str = ""
-
-    tool_max_attempts: int = 3
-    tool_retry_base_seconds: float = 0.1
-    tool_retry_max_seconds: float = 1.0
-
-    # 开发无 Redis 地址时使用有界内存；生产环境由构建器强制 Redis。
-    conversation_backend: str = "auto"       # auto / memory / redis
-    conversation_ttl_seconds: int = 86_400
-    conversation_max_sessions: int = 1_000
-    conversation_max_messages: int = 100
-    conversation_max_analyses: int = 20
-    conversation_max_reports: int = 10
-    conversation_max_result_rows: int = 200
-    redis_url: str = ""
-    redis_key_prefix: str = "medical:conversation:"
-    redis_socket_timeout: float = 1.0
-    # 分布式会话锁必须覆盖最慢的 Spark/LLM 任务，并在持锁期间定期续租。
-    conversation_lock_timeout_seconds: float = 900.0
-    conversation_lock_blocking_timeout_seconds: float = 30.0
-    conversation_lock_renew_interval_seconds: float = 60.0
-
-    report_max_analyses: int = 10
 
     # ---- 日志 ----
     log_dir: Path = LOG_DIR_DEFAULT
@@ -136,28 +134,23 @@ class Settings:
         """从 .env 与环境变量加载配置。"""
         load_dotenv(BASE_DIR / ".env", override=False)
 
+        # 文件顶部 `from __future__ import annotations` 会把字段注解变成字符串，
+        # 因此必须用 get_type_hints 解析真实类型，否则 bool/int/float/Path 全判为 str
+        type_hints = typing.get_type_hints(cls)
+
         kwargs: dict = {}
-        # ``from __future__ import annotations`` 会让 Field.type 可能是字符串；
-        # 先解析真实类型，确保端口、TTL、布尔值等环境变量不会错误保留为 str。
-        type_hints = get_type_hints(cls)
         for f in fields(cls):
             raw = os.environ.get(f"ANALYTICS_{f.name.upper()}")
             if raw is None:
                 continue
-            if f.default is not MISSING:
-                default = f.default
-            elif f.default_factory is not MISSING:
-                default = f.default_factory()
-            else:
-                default = None
-            target_type = type_hints.get(f.name, f.type)
-            if target_type is bool:
-                kwargs[f.name] = _parse_bool(raw, bool(default))
-            elif target_type is int:
+            ftype = type_hints.get(f.name)
+            if ftype is bool:
+                kwargs[f.name] = _parse_bool(raw, False)
+            elif ftype is int:
                 kwargs[f.name] = int(raw)
-            elif target_type is float:
+            elif ftype is float:
                 kwargs[f.name] = float(raw)
-            elif target_type is Path:
+            elif ftype is Path:
                 kwargs[f.name] = Path(raw)
             else:
                 kwargs[f.name] = raw

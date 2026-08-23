@@ -30,11 +30,11 @@ def configure_logging(settings: Settings) -> None:
     root.setLevel(settings.log_level.upper())
 
     formatter = logging.Formatter(_FORMAT)
-    trace_filter = TraceIdFilter()
+    trace_filter = TraceIdFilter()   # 挂在 handler 上：子 logger 传播的记录同样会经过
 
     console = logging.StreamHandler(sys.stdout)
     console.setFormatter(formatter)
-    console.addFilter(trace_filter)   # 挂到 handler 上，子 logger 记录同样生效
+    console.addFilter(trace_filter)
     root.addHandler(console)
 
     try:
