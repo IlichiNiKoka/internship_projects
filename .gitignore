@@ -16,6 +16,9 @@ data_process/raw/*.7z
 data_process/processed/*_clean.csv
 data_process/processed/processing_report.json
 
+# 数据库备份文件（人员2 · UC6，mysqldump 生成的大体积 .sql）
+data_process/backups/
+
 # ------------------------------
 # 2. Python 编译产物与字节码
 # ------------------------------

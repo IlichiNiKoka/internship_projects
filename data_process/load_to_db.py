@@ -24,6 +24,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 import cleaning_config as config
+from config.settings import Settings
 from storage.loader import DatabaseLoader
 
 
@@ -46,7 +47,8 @@ def main() -> None:
     args = parser.parse_args()
 
     csv_path = args.csv or _default_csv()
-    loader = DatabaseLoader(csv_path, engine=args.engine)
+    settings = Settings.load()
+    loader = DatabaseLoader.from_settings(csv_path, settings, engine=args.engine)
     report = loader.load()
 
     print("=" * 60)

@@ -52,6 +52,14 @@ class Settings:
 
     # ---- 数据源 ----
     data_csv_path: Path = DEFAULT_CLEAN_CSV
+    # 数据提供者类型：csv（本地清洗后 CSV，一期）/ mysql / hdfs（二期数据底座）
+    data_source: str = "csv"
+    # MySQL 数据底座：复用人员2 入库的 db_* 连接参数，走 Spark JDBC 读取入库表
+    mysql_jdbc_driver: str = "com.mysql.cj.jdbc.Driver"   # MySQL Connector/J 驱动类
+    mysql_jdbc_connect_timeout_ms: int = 5000             # JDBC 建连超时（毫秒）
+    # HDFS 数据底座
+    hdfs_namenode: str = ""                 # NameNode 地址，如 hdfs://namenode:8020（留空用默认）
+    hdfs_path: str = ""                     # HDFS 上清洗后数据路径，如 /data/sparcs_clean.csv
 
     # ---- 结构化大数据入库（人员2 · 二期 MySQL / SQLite 兜底）----
     # engine: auto(MySQL 优先，失败降级 SQLite) / mysql / sqlite
