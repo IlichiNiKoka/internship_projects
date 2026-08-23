@@ -32,6 +32,11 @@ pyspark==3.5.1
 # 也兼容 OpenAI / Azure / 本地 vLLM 等 OpenAI 兼容端点
 openai>=1.30
 
+# ---- AI 应用编排（人员1：LangChain Tool / Redis 会话）----
+# 业务代码在未安装时仍可用本地工具/内存会话，生产环境建议安装并启用 Redis。
+langchain-core>=0.3,<2.0
+redis>=5.0,<7.0
+
 # ---- 生产部署（可选，Linux 服务器上使用）----
 # gunicorn==23.0.0
 

@@ -63,6 +63,11 @@ def _extract_numbers_from_value(value, sink: list[float]) -> None:
             sink.append(float(len(value)))  # 集合长度合理推导
         for item in value:
             _extract_numbers_from_value(item, sink)
+    elif isinstance(value, str):
+        # 字符串字段值里的数字也纳入源数字集（如 "70 or Older"、"0 to 17"）。
+        # 否则 LLM 在摘要里复述维度标签时，这些数字会被误判为「无中生有」，
+        # 导致整段摘要被标记不可信（与文本侧使用同一套抽取规则，保持对称）。
+        sink.extend(_extract_numbers_from_text(value))
 
 
 # 匹配文本中的数字：

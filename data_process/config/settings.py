@@ -64,8 +64,6 @@ class Settings:
     db_table: str = "sparcs_discharge_2021"
     db_batch_size: int = 10000          # 每批写入行数（批量 INSERT，避免单条过慢）
     db_sqlite_path: Path = DEFAULT_CLEAN_CSV.parent / "sparcs.db"  # SQLite 兜底文件
-    db_backup_dir: Path = BASE_DIR / "backups"   # UC6 备份文件目录
-    mysql_bin_dir: str = ""                       # MySQL bin 目录（含 mysqldump/mysql，留空自动探测）
 
     # ---- Spark ----
     spark_master: str = "local[*]"          # 生产可改为 yarn / spark://...
