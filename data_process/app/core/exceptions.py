@@ -57,6 +57,46 @@ class ResourceNotFoundError(BizException):
         super().__init__(ErrorCode.NOT_FOUND, message)
 
 
+class ConflictError(BizException):
+    """资源状态冲突（409），如幂等键重复使用或会话版本冲突。"""
+
+    def __init__(self, message: str | None = None, detail: object = None):
+        super().__init__(ErrorCode.CONFLICT, message, detail)
+
+
+# ---- 4xx：认证 / 权限 / 限流类（二期 3.3.5）----
+class UnauthorizedError(BizException):
+    """未携带认证凭证（401）。"""
+
+    def __init__(self, detail: object = None, message: str | None = None):
+        super().__init__(ErrorCode.UNAUTHORIZED, message, detail)
+
+
+class ForbiddenError(BizException):
+    """认证凭证无效或无权限访问（403）。"""
+
+    def __init__(self, detail: object = None, message: str | None = None):
+        super().__init__(ErrorCode.FORBIDDEN, message, detail)
+
+
+class TooManyRequestsError(BizException):
+    """请求频率超限或会话锁竞争失败（429）。"""
+
+    def __init__(self, message: str | None = None, detail: object = None):
+        super().__init__(ErrorCode.TOO_MANY_REQUESTS, message, detail)
+
+
+class RateLimitError(BizException):
+    """请求频率超限（429），detail 携带重试等待秒数。"""
+
+    def __init__(self, retry_after: float | int = 1, detail: object = None,
+                 message: str | None = None):
+        self.retry_after = max(1, int(retry_after))
+        if detail is None:
+            detail = {"retry_after_seconds": self.retry_after}
+        super().__init__(ErrorCode.TOO_MANY_REQUESTS, message, detail)
+
+
 class AlgorithmNotFoundError(BizException):
     def __init__(self, name: str):
         super().__init__(
