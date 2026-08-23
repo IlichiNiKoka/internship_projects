@@ -42,10 +42,10 @@ def create_app(settings: Settings | None = None, data_provider=None) -> Flask:
         slow_query_threshold_seconds=settings.slow_query_threshold_seconds)
     ext.rate_limiter = SlidingWindowLimiter()
 
-    # 4) 数据源（默认 Spark CSV；测试可注入替身）
+    # 4) 数据源（按 data_source 配置选择 csv / mysql / hdfs；测试可注入替身）
     if data_provider is None:
-        from app.data.data_provider import SparkDataProvider
-        data_provider = SparkDataProvider(settings)
+        from app.data.data_provider import build_data_provider
+        data_provider = build_data_provider(settings)
     ext.data_provider = data_provider
 
     # 5) 算法组件注册（幂等）
