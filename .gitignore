@@ -167,3 +167,11 @@ instance/
 # 12. docx 原始文件（保留，但如需控制体积可取消注释）
 # ------------------------------
 # docs/**/*.docx
+
+# ------------------------------
+# 13. 前端（Node.js / Vue / Vite）
+# ------------------------------
+node_modules/
+smart-medical-frontend/dist/
+smart-medical-frontend/.vite/
+*.local
