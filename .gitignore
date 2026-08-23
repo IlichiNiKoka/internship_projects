@@ -19,6 +19,9 @@ data_process/processed/**/*.csv
 data_process/processed/**/*.json
 !data_process/processed/.gitkeep
 
+# 数据库备份文件（人员2 · UC6，mysqldump 生成的大体积 .sql）
+data_process/backups/
+
 # ------------------------------
 # 2. Python 编译产物与字节码
 # ------------------------------

@@ -144,6 +144,19 @@ pytest -m "not spark"   # 跳过依赖 Spark 的用例
 | 请求体限制修复 | `app/core/error_codes.py` | 补充 413 错误码，超大请求体返回标准化 413 而非 500 |
 | 接口耗时监控 | `GET /api/v1/meta/performance` | 请求量、平均/最大耗时、慢查询明细、错误码分布、缓存状态 |
 
+### 4.5 数据入库与质量保障（人员2 二期：MySQL 入库 / 质量评估 / 备份 / 增量更新）
+
+数据库连接统一由 `config/settings.py` 的 `db_*` 字段控制（`.env` 或 `ANALYTICS_DB_*` 环境变量可覆盖）。
+
+| 能力 | 入口 | 说明 |
+|---|---|---|
+| 结构化入库（UC4 二期） | `python load_to_db.py` | 清洗后 CSV 写入 MySQL（失败降级 SQLite），按 `row_hash` 唯一键去重 |
+| 数据质量评估（UC5） | `python quality_report.py` | 完整性 / 准确性 / 一致性 / 时效性四维评分，产出 `processed/quality_report.json` + `quality_report.html`（ECharts） |
+| 备份与恢复（UC6） | `python backup.py` | 手动备份 / `--restore` 恢复 / `--schedule` 定时备份（mysqldump） |
+| 增量更新（UC7） | 入库报告 `incremental` 字段 | 记录本次新增 `new_rows_inserted` 与重复跳过 `duplicate_rows_skipped` |
+
+备份文件默认输出到 `data_process/backups/`（已加入 .gitignore）；mysqldump 不在 PATH 时可用 `--bin-dir` 或 `ANALYTICS_MYSQL_BIN_DIR` 指定 MySQL bin 目录。
+
 ---
 
 ## 5. 清洗规则总览（做了什么 + 为什么）

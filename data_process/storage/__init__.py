@@ -7,7 +7,9 @@
   * 入库逻辑见 loader.py（分块读取 + 批量 INSERT + 增量去重 + 报告）。
 """
 
+from storage.backup import DatabaseBackupManager
 from storage.loader import DatabaseLoader
+from storage.quality import DataQualityAssessor, render_html
 from storage.schema import (
     DOUBLE_FIELDS,
     INT_FIELDS,
@@ -19,6 +21,9 @@ from storage.schema import (
 
 __all__ = [
     "DatabaseLoader",
+    "DatabaseBackupManager",
+    "DataQualityAssessor",
+    "render_html",
     "ORDERED_FIELDS",
     "STRING_FIELDS",
     "INT_FIELDS",

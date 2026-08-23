@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>数据质量评估报告</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<style>
+  body { font-family: -apple-system, "Microsoft YaHei", sans-serif; margin: 0; background:#f5f7fa; }
+  .header { background:#1f2d3d; color:#fff; padding:24px 32px; }
+  .header h1 { margin:0; font-size:22px; }
+  .header .score { font-size:40px; font-weight:700; margin-top:8px; }
+  .header .grade { display:inline-block; margin-left:12px; padding:4px 14px; border-radius:6px;
+                     background:#67c23a; color:#fff; font-size:20px; vertical-align:middle; }
+  .grid { display:flex; flex-wrap:wrap; gap:16px; padding:24px 32px; }
+  .card { background:#fff; border-radius:8px; box-shadow:0 2px 8px rgba(0,0,0,.06); padding:16px; }
+  #radar { width:480px; height:360px; }
+  #bars { width:640px; height:440px; }
+  .meta { color:#606266; font-size:13px; padding:0 32px 24px; }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>数据质量评估报告 · 四维评分</h1>
+  <div><span class="score">99.87</span><span class="grade">A</span></div>
+</div>
+<div class="grid">
+  <div class="card" id="radar"></div>
+  <div class="card" id="bars"></div>
+</div>
+<div class="meta">
+  数据行数：2,095,384　|　完整性 99.49 · 准确性 100.0 · 一致性 99.97 · 时效性 100.0
+</div>
+<script>
+const DATA = {"dimensions": ["完整性", "准确性", "一致性", "时效性"], "radar": [99.49, 100.0, 99.97, 100.0], "overall": 99.87, "grade": "A", "total_rows": 2095384, "field_names": ["hospital_service_area", "hospital_county", "operating_certificate_number", "permanent_facility_id", "facility_name", "age_group", "zip_code_3_digits", "gender", "race", "ethnicity", "type_of_admission", "patient_disposition", "ccsr_diagnosis_code", "ccsr_diagnosis_description", "apr_drg_code", "apr_drg_description", "apr_mdc_code", "apr_mdc_description", "apr_severity_of_illness_description", "apr_risk_of_mortality", "apr_medical_surgical_description", "payment_typology_1", "emergency_department_indicator", "length_of_stay", "discharge_year", "apr_severity_of_illness_code", "total_charges", "total_costs"], "completeness_values": [99.49, 99.49, 99.42, 99.49, 100.0, 100.0, 97.85, 99.99, 100.0, 90.53, 100.0, 100.0, 99.92, 99.92, 100.0, 100.0, 100.0, 100.0, 99.88, 99.88, 100.0, 100.0, 100.0, 99.93, 100.0, 100.0, 100.0, 100.0]};
+const radar = echarts.init(document.getElementById('radar'));
+radar.setOption({
+  title: { text: '四维评分雷达图', left: 'center' },
+  tooltip: {},
+  radar: {
+    indicator: DATA.dimensions.map(d => ({ name: d, max: 100 })),
+    radius: '65%'
+  },
+  series: [{
+    type: 'radar',
+    data: [{ value: DATA.radar, name: '质量评分' }],
+    areaStyle: { opacity: 0.25 }
+  }]
+});
+const bars = echarts.init(document.getElementById('bars'));
+bars.setOption({
+  title: { text: '核心字段完整度（%）', left: 'center' },
+  tooltip: { trigger: 'axis' },
+  grid: { left: '3%', right: '4%', bottom: '20%', containLabel: true },
+  xAxis: { type: 'category', data: DATA.field_names, axisLabel: { rotate: 60, interval: 0, fontSize: 10 } },
+  yAxis: { type: 'value', min: 0, max: 100 },
+  series: [{ type: 'bar', data: DATA.completeness_values, barMaxWidth: 22,
+               itemStyle: { color: '#409eff' } }]
+});
+</script>
+</body>
+</html>
