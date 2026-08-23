@@ -25,10 +25,12 @@ from pyspark.sql import Column, DataFrame, functions as F
 from app.core.cache import NullCache
 from app.core.exceptions import (
     ComputationError,
+    ComputationTimeoutError,
     InvalidDimensionError,
     InvalidFilterError,
     InvalidMetricError,
 )
+from app.core.timeout import run_with_timeout
 from config.registry import (
     DIMENSIONS,
     METRICS,
@@ -61,13 +63,21 @@ class AggregationService:
         df: DataFrame | None = None,
         cache=None,              # CacheBackend，默认 NullCache
         settings: Settings | None = None,
+        timeout_seconds: float | None = None,   # 二期：计算超时阈值，显式传入优先于配置
     ):
         self._provider = provider
         self._df = df
         self._cache = cache or NullCache()
         self._settings = settings
         self._max_limit = settings.agg_max_limit if settings else 1000
+        self._default_limit = settings.agg_default_limit if settings else 100
         self._max_dimensions = settings.agg_max_dimensions if settings else 5
+        # 二期 3.3.4：超时阈值（<=0 不限制）与慢查询阈值（<=0 不告警）
+        if timeout_seconds is not None:
+            self._timeout_seconds = timeout_seconds
+        else:
+            self._timeout_seconds = settings.agg_timeout_seconds if settings else None
+        self._slow_threshold = (settings.slow_query_threshold_seconds if settings else 5.0) or 0.0
 
     # ------------------------------------------------------------------
     def run(self, request: dict, use_cache: bool = True) -> dict:
@@ -79,14 +89,17 @@ class AggregationService:
           filters:    list[dict] 过滤条件（可选）
           sort:       list[dict] 排序规则（可选，默认按首个指标降序）
           limit:      int        返回行数（可选，默认由配置决定）
+          page/page_size: int    大结果集分页（二期 3.3.4，任一出现即启用分页）
         """
-        # ---- 1. 白名单校验与解析 ----
-        dimensions, metrics, limit = self._validate_request(request)
+        # ---- 1. 白名单校验与解析（含二期分页参数）----
+        dimensions, metrics, limit, page, page_size = self._validate_request(request)
         filters = self._normalize_filters(request.get("filters") or [])
         sort_specs = self._normalize_sort(request.get("sort") or [], metrics)
+        use_pagination = page is not None
 
-        # ---- 2. 缓存查询（相同口径的重复请求直接命中）----
-        cache_key = self._cache_key(dimensions, metrics, filters, sort_specs, limit)
+        # ---- 2. 缓存查询（相同口径的重复请求直接命中，分页参数参与缓存键）----
+        cache_key = self._cache_key(dimensions, metrics, filters, sort_specs,
+                                    limit, page, page_size)
         if use_cache:
             cached = self._cache.get(cache_key)
             if cached is not None:
@@ -94,7 +107,8 @@ class AggregationService:
                 cached["cached"] = True
                 return cached
 
-        # ---- 3. Spark 分组聚合计算 ----
+        # ---- 3. Spark 分组聚合计算（二期 3.3.4：超时控制 -> 504 降级）----
+        fetch_limit = page * page_size if use_pagination else limit
         start = time.perf_counter()
         try:
             df = self._dataframe()
@@ -108,7 +122,14 @@ class AggregationService:
                 for spec in sort_specs
             ]
             ordered = agg_result.orderBy(*order_cols)
-            rows = [r.asDict(recursive=True) for r in ordered.limit(limit).collect()]
+
+            raw_rows = run_with_timeout(
+                lambda: [r.asDict(recursive=True) for r in ordered.limit(fetch_limit).collect()],
+                timeout_seconds=self._timeout_seconds,
+                task_name=f"聚合分析({len(dimensions)}维x{len(metrics)}指标)",
+            )
+        except ComputationTimeoutError:
+            raise   # 超时降级（504）由中间件统一响应，不包成 500
         except Exception as exc:
             logger.exception("聚合计算失败")
             raise ComputationError(
@@ -118,7 +139,22 @@ class AggregationService:
 
         elapsed = round(time.perf_counter() - start, 3)
 
-        # ---- 4. 结果归一化（数值精度、NaN、字段命名）----
+        # ---- 3.5 慢查询日志与告警（二期 3.3.4 备选流B）----
+        if self._slow_threshold > 0 and elapsed >= self._slow_threshold:
+            logger.warning(
+                "慢查询告警: 聚合查询耗时 %.3fs（阈值 %.1fs）cache_key=%s",
+                elapsed, self._slow_threshold, cache_key,
+            )
+
+        # ---- 4. 分页裁剪 + 结果归一化（数值精度、NaN、字段命名）----
+        if use_pagination:
+            begin = (page - 1) * page_size
+            rows = raw_rows[begin:begin + page_size]
+            has_more = len(raw_rows) == fetch_limit   # 取满 fetch_limit 说明可能还有下一页
+        else:
+            rows = raw_rows
+            has_more = None
+
         normalized_rows = self._normalize_rows(rows, metrics)
 
         result = {
@@ -130,10 +166,17 @@ class AggregationService:
             "sort": sort_specs,
             "rows": normalized_rows,
             "row_count": len(normalized_rows),
-            "truncated": len(rows) >= limit,   # 达到 limit 说明可能被截断
+            "truncated": has_more if use_pagination else len(raw_rows) >= limit,
             "cached": False,
             "compute_seconds": elapsed,
         }
+        if use_pagination:
+            result["pagination"] = {
+                "page": page,
+                "page_size": page_size,
+                "returned": len(normalized_rows),
+                "has_more": has_more,
+            }
 
         # ---- 5. 写缓存 ----
         if use_cache:
@@ -149,7 +192,7 @@ class AggregationService:
         raise ComputationError("数据源未配置（provider 与 df 均为空）")
 
     # ---- 校验 ----
-    def _validate_request(self, request: dict) -> tuple[list[DimensionSpec], list[MetricSpec], int]:
+    def _validate_request(self, request: dict) -> tuple[list[DimensionSpec], list[MetricSpec], int, int | None, int | None]:
         dim_keys = request.get("dimensions") or []
         metric_keys = request.get("metrics") or []
 
@@ -183,9 +226,19 @@ class AggregationService:
         if invalid_m:
             raise InvalidMetricError(invalid_m, available=[m.key for m in METRICS])
 
-        limit = request.get("limit") or 100
-        limit = max(1, min(int(limit), self._max_limit))
-        return dimensions, metrics, limit
+        # ---- 二期 3.3.4：大结果集分页（page/page_size 任一出现即启用分页模式）----
+        raw_page = request.get("page")
+        raw_page_size = request.get("page_size")
+        if raw_page is not None or raw_page_size is not None:
+            page = max(1, int(raw_page or 1))
+            page_size = raw_page_size or request.get("limit") or self._default_limit
+            page_size = max(1, min(int(page_size), self._max_limit))
+            limit = page_size
+        else:
+            page, page_size = None, None
+            limit = request.get("limit") or self._default_limit
+            limit = max(1, min(int(limit), self._max_limit))
+        return dimensions, metrics, limit, page, page_size
 
     # ---- 过滤条件规范化与执行 ----
     def _normalize_filters(self, filters: list[dict]) -> list[dict]:
@@ -303,13 +356,16 @@ class AggregationService:
         return normalized
 
     @staticmethod
-    def _cache_key(dimensions, metrics, filters, sort_specs, limit) -> str:
+    def _cache_key(dimensions, metrics, filters, sort_specs, limit,
+                   page=None, page_size=None) -> str:
         payload = json.dumps({
             "d": [d.column for d in dimensions],
             "m": [m.key for m in metrics],
             "f": filters,
             "s": sort_specs,
             "l": limit,
+            "p": page,       # 二期：分页参数参与缓存键，避免页间串数据
+            "ps": page_size,
         }, sort_keys=True, ensure_ascii=True)
         digest = hashlib.sha1(payload.encode("utf-8")).hexdigest()[:32]
         return f"agg:{digest}"

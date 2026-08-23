@@ -35,3 +35,15 @@ def algorithms():
 def cache_stats():
     """缓存运行状态（命中率等）。"""
     return success(ext.cache.stats if ext.cache else {})
+
+
+@bp.get("/performance")
+def performance():
+    """接口性能监控（二期 3.3.4 用例“监控接口耗时”）。
+
+    返回请求量、平均/最大耗时、慢查询计数与明细、错误码分布、缓存状态。
+    """
+    monitor = getattr(ext, "monitor", None)
+    data = monitor.stats if monitor is not None else {}
+    data["cache"] = ext.cache.stats if ext.cache else {}
+    return success(data)

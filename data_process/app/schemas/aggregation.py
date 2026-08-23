@@ -42,3 +42,6 @@ class AggregationRequestSchema(Schema):
     filters = fields.List(fields.Nested(FilterSchema), load_default=[])
     sort = fields.List(fields.Nested(SortItemSchema), load_default=[])
     limit = fields.Int(load_default=None, validate=ma_validate.Range(min=1, max=1000))
+    # 二期 3.3.4：大结果集分页（page 从 1 开始；任一出现即启用分页模式）
+    page = fields.Int(load_default=None, validate=ma_validate.Range(min=1))
+    page_size = fields.Int(load_default=None, validate=ma_validate.Range(min=1, max=1000))

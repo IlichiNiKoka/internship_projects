@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import os
+import typing
 from dataclasses import MISSING, dataclass, fields
 from pathlib import Path
 
@@ -52,17 +53,49 @@ class Settings:
     # ---- 数据源 ----
     data_csv_path: Path = DEFAULT_CLEAN_CSV
 
+    # ---- 结构化大数据入库（人员2 · 二期 MySQL / SQLite 兜底）----
+    # engine: auto(MySQL 优先，失败降级 SQLite) / mysql / sqlite
+    db_engine: str = "auto"
+    db_host: str = "127.0.0.1"
+    db_port: int = 3306
+    db_user: str = "root"
+    db_password: str = ""
+    db_name: str = "medical_analytics"
+    db_table: str = "sparcs_discharge_2021"
+    db_batch_size: int = 10000          # 每批写入行数（批量 INSERT，避免单条过慢）
+    db_sqlite_path: Path = DEFAULT_CLEAN_CSV.parent / "sparcs.db"  # SQLite 兜底文件
+
     # ---- Spark ----
     spark_master: str = "local[*]"          # 生产可改为 yarn / spark://...
     spark_log_level: str = "WARN"           # Spark 内部日志级别
     spark_driver_memory: str = "2g"
     spark_java_home: str = ""               # 留空自动探测（见 utils/spark.py）
     spark_shuffle_partitions: int = 8       # 本地模式无需过多分区
+    spark_adaptive_enabled: bool = True     # Spark SQL AQE 自适应执行（二期任务参数优化）
 
-    # ---- 结果缓存（一期：进程内 TTL 缓存；二期切换 Redis，接口不变）----
+    # ---- 结果缓存（一期：进程内 TTL 缓存；二期支持 Redis 后端）----
     cache_enabled: bool = True
+    cache_backend: str = "in-memory"       # in-memory / redis（redis 不可用时自动降级）
     cache_ttl_seconds: int = 300
     cache_max_entries: int = 256
+    redis_host: str = "127.0.0.1"
+    redis_port: int = 6379
+    redis_db: int = 0
+    redis_password: str = ""
+    redis_connect_timeout: float = 2.0     # 连接/读写超时（秒）
+
+    # ---- 超时与慢查询（二期 3.3.4 API 性能优化）----
+    agg_timeout_seconds: float = 120.0     # 聚合计算超时阈值，<=0 表示不限制
+    algo_timeout_seconds: float = 300.0    # 算法计算超时阈值，<=0 表示不限制
+    slow_query_threshold_seconds: float = 5.0  # 超过该耗时的请求记入慢查询并告警
+
+    # ---- 权限与限流（二期 3.3.5 API 异常处理机制）----
+    api_auth_enabled: bool = False         # 是否启用 API Token 认证
+    api_auth_tokens: str = ""              # 逗号分隔的合法 Token；启用认证但留空则拒绝所有请求
+    api_auth_public_paths: str = "/api/v1/health"  # 免认证路径前缀（逗号分隔）
+    rate_limit_enabled: bool = False       # 是否启用限流
+    rate_limit_requests: int = 100         # 滑动窗口内单个客户端允许的最大请求数
+    rate_limit_window_seconds: int = 60    # 滑动窗口长度（秒）
 
     # ---- 聚合接口限制 ----
     agg_default_limit: int = 100
@@ -101,24 +134,23 @@ class Settings:
         """从 .env 与环境变量加载配置。"""
         load_dotenv(BASE_DIR / ".env", override=False)
 
+        # 文件顶部 `from __future__ import annotations` 会把字段注解变成字符串，
+        # 因此必须用 get_type_hints 解析真实类型，否则 bool/int/float/Path 全判为 str
+        type_hints = typing.get_type_hints(cls)
+
         kwargs: dict = {}
         for f in fields(cls):
             raw = os.environ.get(f"ANALYTICS_{f.name.upper()}")
             if raw is None:
                 continue
-            if f.default is not MISSING:
-                default = f.default
-            elif f.default_factory is not MISSING:
-                default = f.default_factory()
-            else:
-                default = None
-            if f.type is bool:
-                kwargs[f.name] = _parse_bool(raw, bool(default))
-            elif f.type is int:
+            ftype = type_hints.get(f.name)
+            if ftype is bool:
+                kwargs[f.name] = _parse_bool(raw, False)
+            elif ftype is int:
                 kwargs[f.name] = int(raw)
-            elif f.type is float:
+            elif ftype is float:
                 kwargs[f.name] = float(raw)
-            elif f.type is Path:
+            elif ftype is Path:
                 kwargs[f.name] = Path(raw)
             else:
                 kwargs[f.name] = raw
