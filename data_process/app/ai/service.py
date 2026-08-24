@@ -11,12 +11,12 @@
   * AlgorithmService：复杂算法调度（人员3，statistics/association/cost_prediction/readmission_risk）
   * MetadataService：维度/指标/算法清单（人员3）
 
-TODO (Phase 2 - AI 模块二期增强):
-  1. LLM 本地化部署：支持 Qwen/BaiChuan 离线推理（llm_client.py 需新增本地客户端实现）
-  2. 多意图识别与编排：单次查询可能触发多个下游调用，需支持并行/串行编排
-  3. 可视化进阶：3D 图表、医院分布地图、动态时序图 -> 需前端配合，后端提供结构化数据
-  4. 多轮对话深度语义记忆：基于向量检索/知识图谱的上下文关联
-  5. 幻觉校验增强：事实核查、引用追踪、逻辑一致性检查
+Phase 2 增强（已实现）：
+  1. LLM 本地化部署：llm_client.py 已支持 Ollama / vLLM OpenAI 兼容端点；
+  2. 多意图识别与编排：execute_multi() 使用 LLM 识别多意图，本地串行编排下游；
+  3. 多轮对话深度语义记忆：见 app/application/memory.py 的 LLM 压缩与检索；
+  4. 幻觉校验增强：见 app/ai/summary/hallucination.py 的 LLM 事实核查。
+  待办（需前端配合）：3D 图表 / 医院分布地图 / 动态时序图。
 """
 from __future__ import annotations
 
@@ -118,6 +118,40 @@ class AIService:
             analysis_result=analysis,
         )
         return AIExecutionResult(intent=intent, analysis=analysis, summary=summary)
+
+    # ------------------------------------------------------------------
+    # 2b. 多意图执行（Phase 2：LLM 识别多意图，本地串行编排下游）
+    # ------------------------------------------------------------------
+    def execute_multi(self, query: str) -> list[AIExecutionResult]:
+        """多意图端到端：LLM 识别全部意图 -> 本地逐个调度 -> 各自生成摘要。
+
+        本地职责：prompt 编排、下游调度、结果组装。
+        LLM 职责：意图识别、参数抽取。
+        """
+        from app.ai.intent.llm_classifier import LLMAugmentedClassifier
+
+        augmented = LLMAugmentedClassifier(
+            rule_classifier=self._classifier,
+            llm_client=self._client,
+        )
+        intents = augmented.classify_multi(query)
+        results: list[AIExecutionResult] = []
+        for intent in intents:
+            if intent.intent == "unsupported":
+                continue
+            try:
+                analysis = self._dispatch(intent)
+            except Exception as e:
+                logger.warning("多意图下游调度失败 intent=%s err=%s", intent.intent, e)
+                analysis = {"error": str(e), "intent": intent.intent}
+            summary = self._generator.generate(
+                user_query=query,
+                intent_label=intent.spec.label_cn,
+                intent_key=intent.intent,
+                analysis_result=analysis,
+            )
+            results.append(AIExecutionResult(intent=intent, analysis=analysis, summary=summary))
+        return results
 
     # ------------------------------------------------------------------
     # 3. 单独文本生成（用户已有分析结果）

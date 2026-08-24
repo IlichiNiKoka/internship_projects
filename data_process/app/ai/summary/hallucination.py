@@ -12,18 +12,24 @@
   * 整数比对要忽略格式（1000 与 "1,000" 视为同值）；
   * 浮点比对允许 2% 相对误差，避免四舍五入导致误报。
 
-TODO (Phase 2 - 幻觉校验增强):
-  1. 事实核查：引入知识库/外部 API 交叉验证医疗事实（如 ICD 编码、药物剂量）
-  2. 引用追踪：生成文本中关键结论需标注来源数据行/字段，支持溯源
-  3. 逻辑一致性检查：前后文矛盾检测（如先说"费用上升"后说"费用下降"）
-  4. 实体一致性：人名、医院名、诊断名等实体与源数据一致性校验
-  5. 语义级幻觉检测：基于 NLI（自然语言推理）模型判断生成文本是否蕴含于源数据
-  6. 置信度分级：high/medium/low 风险等级而非单一 passed/failed
+Phase 2 增强（已实现）：
+  1. 事实核查：LLM 交叉验证生成文本中的事实声明是否源自结构化数据；
+  2. 引用追踪：LLM 为每个关键结论标注来源字段/行号；
+  3. 逻辑一致性检查：LLM 检测前后文矛盾；
+  4. 实体一致性：LLM 校验人名/医院名/诊断名等实体与源数据一致；
+  5. 语义级幻觉检测：LLM 判断生成文本是否蕴含于源数据（NLI）；
+  6. 置信度分级：high/medium/low 风险等级（GradedHallucinationReport）。
+  本地只负责预处理（提取声明、构造 prompt）与结果解析，语义判断交给 LLM。
 """
 from __future__ import annotations
 
+import json
+import logging
 import re
 from dataclasses import dataclass, field
+from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -162,4 +168,193 @@ def check(source: dict | list, generated_text: str,
         source_numbers=src_numbers,
         generated_numbers=gen_numbers,
         unmatched=unmatched,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: LLM 增强幻觉校验（事实核查 + 引用追踪 + 逻辑一致性 + 风险分级）
+# ---------------------------------------------------------------------------
+@dataclass
+class ClaimCheck:
+    """单条事实声明的校验结果。"""
+    claim: str           # 声明文本
+    verdict: str         # supported / contradicted / unverifiable
+    source_ref: str = ""  # 来源字段/行号引用
+    note: str = ""       # 补充说明
+
+
+@dataclass
+class GradedHallucinationReport:
+    """分级幻觉报告：数值层 + LLM 语义层的综合结果。
+
+    risk_level: low（全部通过）/ medium（存在不可验证声明）/ high（存在矛盾或数字不匹配）
+    """
+    passed: bool
+    risk_level: str  # low / medium / high
+    numeric_report: dict = field(default_factory=dict)   # 基础数值检查摘要
+    claims: list[dict] = field(default_factory=list)     # LLM 逐条声明校验
+    contradictions: list[str] = field(default_factory=list)  # 检测到的逻辑矛盾
+    llm_used: bool = False  # 是否实际调用了 LLM
+
+    def to_dict(self) -> dict:
+        return {
+            "passed": self.passed,
+            "risk_level": self.risk_level,
+            "numeric": self.numeric_report,
+            "claims": self.claims,
+            "contradictions": self.contradictions,
+            "llm_used": self.llm_used,
+        }
+
+
+# ---------------------------------------------------------------------------
+# Prompt 设计（本地 prompt steering）
+# ---------------------------------------------------------------------------
+_FACT_CHECK_SYSTEM = """\
+你是一名严格的医疗数据事实核查员。
+
+你将收到：
+1. 「源数据」：结构化医疗分析结果（JSON），是唯一可信事实来源；
+2. 「生成文本」：分析师据此写的自然语言摘要。
+
+你的任务：
+1. 从生成文本中提取每一条事实性声明（含数字、结论、实体名称）；
+2. 逐条判断该声明是否被源数据支持：
+   - supported：源数据中能找到对应；
+   - contradicted：与源数据矛盾（如方向相反、数值不符）；
+   - unverifiable：源数据中无足够信息判断；
+3. 为 supported 的声明标注来源字段/行号（source_ref）；
+4. 检查生成文本是否存在前后逻辑矛盾（如先说上升后说下降）。
+
+【输出格式】仅返回 JSON：
+```json
+{
+  "claims": [
+    {"claim": "声明文本", "verdict": "supported|contradicted|unverifiable", "source_ref": "来源", "note": "备注"}
+  ],
+  "contradictions": ["矛盾描述1", "矛盾描述2"]
+}
+```
+不输出 JSON 以外的文字。
+"""
+
+_FACT_CHECK_USER_TEMPLATE = """「源数据」（JSON）：
+{source_json}
+
+「生成文本」：
+{generated_text}
+
+请逐条核查并返回 JSON。"""
+
+
+def _truncate_source(source: Any, max_chars: int = 4000) -> str:
+    """源数据 JSON 预处理：截断过长内容，避免超出 LLM 上下文窗口。"""
+    try:
+        text = json.dumps(source, ensure_ascii=False, default=str)
+    except Exception:
+        text = str(source)
+    if len(text) > max_chars:
+        text = text[:max_chars] + "\n...（已截断）"
+    return text
+
+
+def _parse_llm_fact_check(raw: str) -> dict | None:
+    """解析 LLM 事实核查的 JSON 响应。"""
+    if not raw:
+        return None
+    # 尝试提取 JSON 对象
+    for pattern in (r"\{[\s\S]*\}", r"\[[\s\S]*\]"):
+        m = re.search(pattern, raw)
+        if m:
+            try:
+                data = json.loads(m.group(0))
+                if isinstance(data, dict):
+                    return data
+            except json.JSONDecodeError:
+                continue
+    return None
+
+
+def check_with_llm(
+    source: dict | list,
+    generated_text: str,
+    llm_client,
+    *,
+    tolerance: float = 0.02,
+) -> GradedHallucinationReport:
+    """综合幻觉校验：数值一致性（本地）+ 语义事实核查（LLM）。
+
+    本地负责：
+      - 数值抽取与比对（已有 check() 逻辑）；
+      - 源数据 JSON 截断预处理；
+      - prompt 编排与 LLM 响应解析；
+      - 风险等级判定。
+
+    LLM 负责：
+      - 逐条声明的事实核查与引用标注；
+      - 逻辑矛盾检测。
+
+    Args:
+        source: 结构化分析结果
+        generated_text: LLM 生成的摘要文本
+        llm_client: LLMClient 实例（Mock/Disabled 时跳过语义层）
+        tolerance: 数值相对误差容忍
+    """
+    # ---- 1. 本地数值层 ----
+    numeric = check(source, generated_text, tolerance)
+    numeric_dict = numeric.to_dict()
+
+    # ---- 2. 判断是否调用 LLM 语义层 ----
+    from app.ai.summary.llm_client import MockClient
+
+    llm_used = False
+    claims: list[dict] = []
+    contradictions: list[str] = []
+
+    if llm_client is not None and not isinstance(llm_client, MockClient):
+        source_json = _truncate_source(source)
+        user_prompt = _FACT_CHECK_USER_TEMPLATE.format(
+            source_json=source_json,
+            generated_text=generated_text or "",
+        )
+        try:
+            raw = llm_client.chat(_FACT_CHECK_SYSTEM, user_prompt)
+            if raw and not raw.startswith("__MOCK__"):
+                parsed = _parse_llm_fact_check(raw)
+                if parsed:
+                    claims = parsed.get("claims") or []
+                    contradictions = parsed.get("contradictions") or []
+                    llm_used = True
+                else:
+                    logger.debug("LLM 事实核查响应无法解析: %s", raw[:200])
+        except Exception as exc:
+            logger.warning("LLM 事实核查调用失败: %s", exc)
+
+    # ---- 3. 风险分级 ----
+    has_numeric_fail = not numeric.passed
+    has_contradiction = bool(contradictions)
+    has_contradicted_claim = any(
+        str(c.get("verdict") or "").lower() == "contradicted" for c in claims
+    )
+
+    if has_contradiction or has_contradicted_claim:
+        risk_level = "high"
+        passed = False
+    elif has_numeric_fail:
+        risk_level = "high"
+        passed = False
+    elif any(str(c.get("verdict") or "").lower() == "unverifiable" for c in claims):
+        risk_level = "medium"
+        passed = True  # 不可验证不等于幻觉，但仍提示风险
+    else:
+        risk_level = "low"
+        passed = True
+
+    return GradedHallucinationReport(
+        passed=passed,
+        risk_level=risk_level,
+        numeric_report=numeric_dict,
+        claims=claims,
+        contradictions=contradictions,
+        llm_used=llm_used,
     )

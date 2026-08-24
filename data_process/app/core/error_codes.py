@@ -32,6 +32,7 @@ class ErrorCode(IntEnum):
     ALGORITHM_NOT_FOUND = 404     # 算法未注册
     METHOD_NOT_ALLOWED = 405
     REQUEST_TIMEOUT = 408
+    CONFLICT = 409                # 资源版本冲突（CAS/乐观锁）
     REQUEST_ENTITY_TOO_LARGE = 413  # 请求体过大（二期修复：中间件映射需该枚举成员）
     UNSUPPORTED_MEDIA_TYPE = 415
     UNPROCESSABLE_ENTITY = 422
@@ -57,6 +58,7 @@ DEFAULT_MESSAGES: dict[int, str] = {
     ErrorCode.ALGORITHM_NOT_FOUND: "算法组件未注册",
     ErrorCode.METHOD_NOT_ALLOWED: "请求方法不被允许",
     ErrorCode.REQUEST_TIMEOUT: "请求处理超时",
+    ErrorCode.CONFLICT: "资源版本冲突",
     ErrorCode.REQUEST_ENTITY_TOO_LARGE: "请求体过大（上限 2MB）",
     ErrorCode.UNSUPPORTED_MEDIA_TYPE: "Content-Type 必须为 application/json",
     ErrorCode.UNPROCESSABLE_ENTITY: "语义校验失败",

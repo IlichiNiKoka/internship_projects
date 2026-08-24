@@ -96,12 +96,22 @@ class SummaryGenerator:
             llm_text = self._mock_render(intent_key, analysis_result)
 
         # ---- 4. 幻觉检查 ----
-        report = hallucination.check(analysis_result, llm_text, self._tolerance)
+        report = hallucination.check_with_llm(
+            analysis_result, llm_text, self._client, tolerance=self._tolerance
+        )
         if not report.passed:
-            # 数字不一致 -> 追加警示但不丢弃
-            llm_text += "\n\n[校验] 数字一致性检查未通过，下列数字未能对应到源数据：" \
-                       f"{', '.join(str(n) for n in report.unmatched[:5])}"
-            logger.warning("幻觉检查未通过 unmatched=%s", report.unmatched[:10])
+            numeric = report.numeric_report or {}
+            unmatched = numeric.get("unmatched") or []
+            risk = report.risk_level
+            parts = [f"风险等级: {risk}"]
+            if unmatched:
+                parts.append("未能对应到源数据的数字: "
+                             + ", ".join(str(n) for n in unmatched[:5]))
+            if report.contradictions:
+                parts.append("逻辑矛盾: " + "; ".join(report.contradictions[:3]))
+            llm_text += "\n\n[校验] " + "；".join(parts)
+            logger.warning("幻觉检查未通过 risk=%s unmatched=%s contradictions=%s",
+                           risk, unmatched[:10], report.contradictions[:3])
 
         return SummaryResult(
             text=llm_text,

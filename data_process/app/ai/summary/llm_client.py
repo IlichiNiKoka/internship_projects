@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""LLM 客户端（需求 3.X.2）。
+"""LLM 客户端（需求 3.X.2 + 3.X.5 LLM 本地化部署）。
 
 设计：
   1. 抽象 `LLMClient` 接口，单一方法 `chat(system, user) -> str`；
-  2. `OpenAICompatibleClient`：用 openai SDK，兼容 OpenAI / DeepSeek / 本地 vLLM；
+  2. `OpenAICompatibleClient`：用 openai SDK，兼容 OpenAI / DeepSeek / 本地 vLLM / Ollama；
   3. `MockClient`：不调网络，按模板渲染（开发与测试默认走这里）；
   4. `DisabledClient`：完全禁用，返回固定提示；
   5. `build_client(settings)`：按配置自动选择，API key 留空 -> Mock。
@@ -13,13 +13,10 @@ DeepSeek 接入：
   - 默认 model=deepseek-chat（V3），可改为 deepseek-reasoner（R1）
   - 协议与 OpenAI 完全兼容，复用同一 SDK 调用代码
 
-TODO (Phase 2 - LLM 本地化部署):
-  1. 新增 LocalLLMClient：支持 Qwen/BaiChuan 等本地模型离线推理
-  2. 支持 llama.cpp / Ollama / vLLM 本地服务模式（OpenAI 兼容 API）
-  3. 模型量化配置：4bit/8bit 量化降低显存占用
-  4. 模型热加载/卸载：按需加载不同规模模型
-  5. 配置扩展：llm_local_model_path, llm_gpu_layers, llm_context_size 等
-  6. build_client 自动检测本地模型可用性（provider=local）
+Ollama 本地部署：
+  - base_url=http://localhost:11434/v1 (Ollama OpenAI 兼容端点)
+  - model=qwen3:14b (或其他已 pull 的模型)
+  - 无需 API key (可任意填写如 "ollama")
 """
 from __future__ import annotations
 
@@ -31,6 +28,8 @@ logger = logging.getLogger(__name__)
 
 # DeepSeek 默认 base_url（DeepSeek API 与 OpenAI 协议兼容）
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
+# Ollama 默认 base_url (Ollama OpenAI 兼容端点)
+OLLAMA_BASE_URL = "http://localhost:11434/v1"
 
 
 # ---------------------------------------------------------------------------

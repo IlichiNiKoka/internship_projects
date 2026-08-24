@@ -18,13 +18,12 @@
   * 模糊查询：基于子串匹配 + 长度容差（3.X.4 大数据模糊查询）；
   * 医疗术语联想：synonym 反向索引（3.X.4 医疗术语联想）。
 
-TODO (Phase 2 - 意图识别优化，准确率>=90%）：
-  1. 替换为 ML 模型分类器（如基于 BERT/Transformer 的文本分类）
-  2. 支持模糊查询：编辑距离/语义相似度匹配，处理拼写错误、口语表达
-  3. 支持多意图识别：单次查询可能包含多个意图
-  4. 医疗术语联想增强：引入医疗知识图谱/术语库（UMLS/ICD/SNOMED）
-  5. 闲聊/非业务查询识别与礼貌拒答
-  6. 置信度校准：temperature scaling / Platt scaling 提升置信度可靠性
+Phase 2 增强（已实现，见 llm_classifier.py）：
+  1. LLM 分类器：规则引擎不命中时回退到 LLM，天然处理拼写错误/口语表达；
+  2. 多意图识别：classify_multi() 使用 LLM 识别单次查询中的多个意图；
+  3. 闲聊/非业务查询：LLM prompt 指示返回 unsupported；
+  4. 医疗术语联想：LLM prompt 包含完整维度/指标词典。
+  待办（需额外基础设施）：BERT/Transformer 本地模型、置信度校准。
 """
 from __future__ import annotations
 

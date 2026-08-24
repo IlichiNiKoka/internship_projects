@@ -78,6 +78,7 @@ class Settings:
     spark_log_level: str = "WARN"           # Spark 内部日志级别
     spark_driver_memory: str = "2g"
     spark_java_home: str = ""               # 留空自动探测（见 utils/spark.py）
+    spark_hadoop_home: str = ""             # 留空自动探测（Windows 下必填路径含 bin/winutils.exe）
     spark_shuffle_partitions: int = 8       # 本地模式无需过多分区
     spark_adaptive_enabled: bool = True     # Spark SQL AQE 自适应执行（二期任务参数优化）
 
