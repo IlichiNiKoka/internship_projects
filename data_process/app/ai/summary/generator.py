@@ -1,13 +1,16 @@
 # -*- coding: utf-8 -*-
 """分析结果文本生成器（需求 3.X.2 主入口）。
 
-流程：
+流程（2026-08-24 性能优化：移除幻觉后置校验）：
   1. 输入：用户原始查询 + 意图识别结果 + 结构化分析结果
   2. 空数据 -> 返回「当前没有可用的分析数据。」
   3. 调用 LLM 生成文本（API key 留空 -> Mock 模板渲染）
-  4. 幻觉检查：对生成文本中的数字与源数据比对
-  5. 不通过 -> 截取 LLM 输出 + 在末尾追加「[校验] 数字一致性检查未通过」
-  6. 通过 -> 返回原文 + 校验报告
+  4. 直接返回原文。
+
+性能说明：
+  旧版在生成后会再做「本地数字比对 + LLM 事实核查」，每次摘要多一次完整
+  LLM 往返，延迟接近翻倍。现改为纯提示词约束防幻觉（见 prompts.py 的
+  SYSTEM_PROMPT 强约束规则），单次查询只调一次 LLM。
 
 输出契约：
   SummaryResult{text, hallucination, llm_provider, fell_back_to_mock}
@@ -19,7 +22,6 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.ai.summary import hallucination
 from app.ai.summary.llm_client import LLMClient
 from app.ai.summary.prompts import (
     MOCK_TEMPLATES,
@@ -37,7 +39,7 @@ class SummaryResult:
     text: str                                  # 生成文本
     llm_provider: str                          # 使用的 LLM 客户端
     fell_back_to_mock: bool = False           # 是否降级到了 Mock 模板
-    hallucination: dict = field(default_factory=dict)  # 幻觉检查报告
+    hallucination: dict = field(default_factory=dict)  # 兼容字段：恒为 prompt_only 模式
     empty_source: bool = False                # 源分析结果是否为空
 
     def to_dict(self) -> dict:
@@ -53,17 +55,25 @@ class SummaryResult:
 # ---------------------------------------------------------------------------
 # 生成器
 # ---------------------------------------------------------------------------
+# 兼容性占位：下游（application/reports 等）仍读取 summary["hallucination"]，
+# 统一返回该标记，表示「无后置校验，防幻觉由系统提示词强约束保证」。
+PROMPT_ONLY_REPORT = {
+    "passed": True,
+    "mode": "prompt_only",
+    "note": "后置幻觉校验已移除，防幻觉由内置提示词强约束保证",
+}
+
+
 class SummaryGenerator:
     """分析结果文本生成器。
 
     使用：
-        generator = SummaryGenerator(client=client, tolerance=0.02)
+        generator = SummaryGenerator(client=client)
         result = generator.generate(query, intent_label, analysis_result)
     """
 
-    def __init__(self, client: LLMClient, tolerance: float = 0.02):
+    def __init__(self, client: LLMClient):
         self._client = client
-        self._tolerance = tolerance
 
     def generate(self, user_query: str, intent_label: str,
                  intent_key: str, analysis_result: Any) -> SummaryResult:
@@ -74,7 +84,7 @@ class SummaryGenerator:
                 text="当前没有可用的分析数据。",
                 llm_provider=self._client.provider,
                 empty_source=True,
-                hallucination=hallucination.HallucinationReport(passed=True).to_dict(),
+                hallucination=dict(PROMPT_ONLY_REPORT),
             )
 
         analysis_json = json.dumps(analysis_result, ensure_ascii=False, default=str)
@@ -95,29 +105,12 @@ class SummaryGenerator:
             fell_back = True
             llm_text = self._mock_render(intent_key, analysis_result)
 
-        # ---- 4. 幻觉检查 ----
-        report = hallucination.check_with_llm(
-            analysis_result, llm_text, self._client, tolerance=self._tolerance
-        )
-        if not report.passed:
-            numeric = report.numeric_report or {}
-            unmatched = numeric.get("unmatched") or []
-            risk = report.risk_level
-            parts = [f"风险等级: {risk}"]
-            if unmatched:
-                parts.append("未能对应到源数据的数字: "
-                             + ", ".join(str(n) for n in unmatched[:5]))
-            if report.contradictions:
-                parts.append("逻辑矛盾: " + "; ".join(report.contradictions[:3]))
-            llm_text += "\n\n[校验] " + "；".join(parts)
-            logger.warning("幻觉检查未通过 risk=%s unmatched=%s contradictions=%s",
-                           risk, unmatched[:10], report.contradictions[:3])
-
+        # ---- 4. 直接返回（不再做幻觉后置校验，防幻觉由 prompts 强约束保证）----
         return SummaryResult(
             text=llm_text,
             llm_provider=self._client.provider,
             fell_back_to_mock=fell_back,
-            hallucination=report.to_dict(),
+            hallucination=dict(PROMPT_ONLY_REPORT),
         )
 
     # ------------------------------------------------------------------

@@ -15,7 +15,7 @@ DeepSeek 接入：
 
 Ollama 本地部署：
   - base_url=http://localhost:11434/v1 (Ollama OpenAI 兼容端点)
-  - model=qwen3:14b (或其他已 pull 的模型)
+  - model=qwen3.5:4b (或其他已 pull 的模型)
   - 无需 API key (可任意填写如 "ollama")
 """
 from __future__ import annotations
@@ -77,31 +77,53 @@ class OpenAICompatibleClient:
         self._OpenAI_cls = OpenAI
 
     def chat(self, system_prompt: str, user_prompt: str) -> str:
-        """调用 chat completions API。"""
+        """调用 chat completions API（空响应自动重试）。"""
         client = self._OpenAI_cls(
             api_key=self._api_key,
             base_url=self._base_url,
             timeout=self._timeout,
         )
-        try:
-            resp = client.chat.completions.create(
-                model=self._model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=self._temperature,
-                max_tokens=self._max_tokens,
-            )
-            text = resp.choices[0].message.content or ""
-            logger.debug("LLM 调用成功 provider=%s model=%s len=%d",
-                        self.provider, self._model, len(text))
-            return text.strip()
-        except Exception as e:
-            logger.warning("LLM 调用失败 provider=%s model=%s err=%s",
-                          self.provider, self._model, e)
-            # 调用失败 -> 走 mock 兜底，保证 API 可用
-            return ""
+        import time
+        last_err: Exception | None = None
+        for attempt in range(3):
+            try:
+                resp = client.chat.completions.create(
+                    model=self._model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    temperature=self._temperature,
+                    max_tokens=self._max_tokens,
+                )
+                # 健壮解析：部分推理模型（如 nemotron / deepseek-reasoner）
+                # 可能返回空 choices 或 content=None（正文在 reasoning 字段）
+                choices = getattr(resp, "choices", None) or []
+                msg = getattr(choices[0], "message", None) if choices else None
+                text = (getattr(msg, "content", None) or "")
+                if not text.strip():
+                    # 兜底：取推理字段内容，避免整次调用白费
+                    text = (getattr(msg, "reasoning_content", None)
+                            or getattr(msg, "reasoning", None) or "")
+                text = text.strip()
+                if text:
+                    logger.debug("LLM 调用成功 provider=%s model=%s len=%d attempt=%d",
+                                self.provider, self._model, len(text), attempt)
+                    return text
+                # 空响应：免费端点偶发限流，短暂等待后重试
+                logger.warning("LLM 空响应 provider=%s model=%s attempt=%d",
+                              self.provider, self._model, attempt)
+                time.sleep(1.5 * (attempt + 1))
+            except Exception as e:
+                last_err = e
+                logger.warning("LLM 调用失败 provider=%s model=%s attempt=%d err=%s",
+                              self.provider, self._model, attempt, e)
+                time.sleep(1.5 * (attempt + 1))
+        if last_err is not None:
+            logger.warning("LLM 重试耗尽 provider=%s model=%s err=%s",
+                          self.provider, self._model, last_err)
+        # 全部失败 -> 返回空串，走 mock 兜底，保证 API 可用
+        return ""
 
 
 # ---------------------------------------------------------------------------

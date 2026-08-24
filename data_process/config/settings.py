@@ -130,8 +130,6 @@ class Settings:
     llm_max_tokens: int = 4000             # 文本生成最大 token（DeepSeek V4 Flash 需更大 token 防止思考内容被截断）
     # 意图识别：达标阈值（低于此值时分类器输出 unsupported）
     intent_min_confidence: float = 0.45
-    # 文本生成幻觉检查：原文数字与生成文本数字允许的相对误差
-    hallucination_tolerance: float = 0.02
 
     # ---- 日志 ----
     log_dir: Path = LOG_DIR_DEFAULT

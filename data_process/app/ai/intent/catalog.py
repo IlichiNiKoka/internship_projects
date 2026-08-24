@@ -100,9 +100,25 @@ INTENTS: list[IntentSpec] = [
         optional_params=("kind",),  # dimensions / metrics / algorithms / cache
     ),
     IntentSpec(
+        key="freeform_query",
+        label_cn="自由形式数据问答",
+        description=(
+            "用户以任何形式提问,先尝试把问题映射到数据库可用维度与指标，"
+            "作为聚合或总览查询执行；无法映射时由 LLM 基于数据决定能否回答，"
+            "超出数据范围明确说明数据未覆盖。适用：任何与出院记录、医院、"
+            "疾病、费用、住院时长、患者画像、年份等相关的开放式问题。"
+        ),
+        downstream="aggregation",
+        requires_params=(),
+        optional_params=("dimensions", "metrics", "filters", "sort", "limit", "top_n"),
+    ),
+    IntentSpec(
         key="unsupported",
         label_cn="不支持范围",
-        description="输入不属于医疗大数据分析范围（与医疗无关或与系统功能无关）",
+        description=(
+            "问题与当前数据库完全无关（闲聊、天气、非医疗常识、编程代码等），"
+            "无法通过现有工具或数据进行基于证据的回答；应礼貌说明数据范围后引导。"
+        ),
         downstream="none",
         requires_params=(),
         optional_params=(),
