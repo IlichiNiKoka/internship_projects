@@ -17,6 +17,14 @@
   * 多维度识别：同时抽取多个 dimension（3.X.4 多维度）；
   * 模糊查询：基于子串匹配 + 长度容差（3.X.4 大数据模糊查询）；
   * 医疗术语联想：synonym 反向索引（3.X.4 医疗术语联想）。
+
+TODO (Phase 2 - 意图识别优化，准确率>=90%）：
+  1. 替换为 ML 模型分类器（如基于 BERT/Transformer 的文本分类）
+  2. 支持模糊查询：编辑距离/语义相似度匹配，处理拼写错误、口语表达
+  3. 支持多意图识别：单次查询可能包含多个意图
+  4. 医疗术语联想增强：引入医疗知识图谱/术语库（UMLS/ICD/SNOMED）
+  5. 闲聊/非业务查询识别与礼貌拒答
+  6. 置信度校准：temperature scaling / Platt scaling 提升置信度可靠性
 """
 from __future__ import annotations
 

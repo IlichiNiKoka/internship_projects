@@ -12,6 +12,14 @@ DeepSeek 接入：
   - base_url=https://api.deepseek.com/v1
   - 默认 model=deepseek-chat（V3），可改为 deepseek-reasoner（R1）
   - 协议与 OpenAI 完全兼容，复用同一 SDK 调用代码
+
+TODO (Phase 2 - LLM 本地化部署):
+  1. 新增 LocalLLMClient：支持 Qwen/BaiChuan 等本地模型离线推理
+  2. 支持 llama.cpp / Ollama / vLLM 本地服务模式（OpenAI 兼容 API）
+  3. 模型量化配置：4bit/8bit 量化降低显存占用
+  4. 模型热加载/卸载：按需加载不同规模模型
+  5. 配置扩展：llm_local_model_path, llm_gpu_layers, llm_context_size 等
+  6. build_client 自动检测本地模型可用性（provider=local）
 """
 from __future__ import annotations
 

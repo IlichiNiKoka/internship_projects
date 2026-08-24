@@ -10,6 +10,13 @@
   * AggregationService：多维度聚合查询（人员3）
   * AlgorithmService：复杂算法调度（人员3，statistics/association/cost_prediction/readmission_risk）
   * MetadataService：维度/指标/算法清单（人员3）
+
+TODO (Phase 2 - AI 模块二期增强):
+  1. LLM 本地化部署：支持 Qwen/BaiChuan 离线推理（llm_client.py 需新增本地客户端实现）
+  2. 多意图识别与编排：单次查询可能触发多个下游调用，需支持并行/串行编排
+  3. 可视化进阶：3D 图表、医院分布地图、动态时序图 -> 需前端配合，后端提供结构化数据
+  4. 多轮对话深度语义记忆：基于向量检索/知识图谱的上下文关联
+  5. 幻觉校验增强：事实核查、引用追踪、逻辑一致性检查
 """
 from __future__ import annotations
 
