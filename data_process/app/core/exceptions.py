@@ -83,6 +83,20 @@ class RateLimitError(BizException):
         super().__init__(ErrorCode.TOO_MANY_REQUESTS, message, detail)
 
 
+class ConflictError(BizException):
+    """资源冲突（409）：并发更新时快照/版本冲突（多轮会话、AI 分析等场景）。"""
+
+    def __init__(self, message: str | None = None, detail: object = None):
+        super().__init__(ErrorCode.CONFLICT, message, detail)
+
+
+class TooManyRequestsError(BizException):
+    """请求过于频繁或并发锁等待超时（429）。"""
+
+    def __init__(self, message: str | None = None, detail: object = None):
+        super().__init__(ErrorCode.TOO_MANY_REQUESTS, message, detail)
+
+
 class AlgorithmNotFoundError(BizException):
     def __init__(self, name: str):
         super().__init__(

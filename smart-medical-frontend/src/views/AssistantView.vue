@@ -80,10 +80,6 @@ function formatTime(timestamp: number) {
   return `${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
-/**
- * 发送单轮请求；若会话已失效（后端重启后内存会话清空，返回 404），
- * 自动清除本地旧会话 ID 并不带 session 重试一次（创建新会话）。
- */
 async function chatOnce(prompt: string, sid: string | null, signal: AbortSignal) {
   try {
     const reply = await sendAssistantChat({ message: prompt, sessionId: sid, signal })
@@ -116,7 +112,6 @@ async function send(promptText?: string) {
   abortController.value = new AbortController()
 
   try {
-    // 调用后端 AI 编排层：意图识别 + Spark 取数 + LLM 摘要（真实 API）
     const reply = await chatOnce(prompt, sessionId.value, abortController.value.signal)
 
     pushMessage({
@@ -313,11 +308,6 @@ function handleKeydown(event: KeyboardEvent) {
         <span>上一条回答失败</span>
         <button type="button" class="chat-send-button" @click="retryLast">重试</button>
       </div>
-
-      <footer class="chat-report-foot">
-        <span>数据来源：后端 AI 编排层（意图识别 + Spark 实时取数 + LLM 摘要）</span>
-        <span>会话：服务端有状态存储</span>
-      </footer>
     </aside>
   </div>
 </template>
