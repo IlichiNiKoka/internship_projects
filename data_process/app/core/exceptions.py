@@ -28,7 +28,12 @@ class ParamValidationError(BizException):
     """请求参数结构校验失败（marshmallow 校验消息走 detail）。"""
 
     def __init__(self, detail: object = None, message: str | None = None):
-        super().__init__(ErrorCode.PARAM_VALIDATION_ERROR, message, detail)
+        # 与 BAD_REQUEST 同码（枚举 alias），默认消息由本类自带，不查通用表
+        super().__init__(
+            ErrorCode.PARAM_VALIDATION_ERROR,
+            message or "参数校验失败",
+            detail,
+        )
 
 
 class InvalidDimensionError(ParamValidationError):
@@ -111,7 +116,12 @@ class ComputationError(BizException):
     """Spark 计算任务失败。"""
 
     def __init__(self, message: str | None = None, detail: object = None):
-        super().__init__(ErrorCode.COMPUTATION_ERROR, message, detail)
+        # 与 INTERNAL_ERROR 同码（枚举 alias），默认消息由本类自带，不查通用表
+        super().__init__(
+            ErrorCode.COMPUTATION_ERROR,
+            message or "大数据计算任务执行失败",
+            detail,
+        )
 
 
 class ServiceUnavailableError(BizException):

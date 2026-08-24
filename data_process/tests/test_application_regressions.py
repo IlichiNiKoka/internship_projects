@@ -155,7 +155,9 @@ class SummaryContractRegressionTests(unittest.TestCase):
         self.assertFalse(report["validation"]["all_summaries_trusted"])
         self.assertTrue(any(item["code"] == "UNTRUSTED_SUMMARY" for item in report["warnings"]))
 
-    def test_saved_summary_is_revalidated_against_persisted_result(self):
+    def test_saved_summary_is_reused_when_generator_fails(self):
+        """幻觉后置校验已移除（改用提示词约束）：生成器故障时复用已保存的
+        可信摘要（SAVED_SUMMARY_REUSED），而不是将整节判为不可信。"""
         class BrokenGenerator:
             def generate(self, **_kwargs):
                 raise RuntimeError("summary unavailable")
@@ -170,6 +172,7 @@ class SummaryContractRegressionTests(unittest.TestCase):
             result={"summary_data": {"total_discharges": 10}},
             summary={
                 "text": "平台共有 999 条记录。",
+                "llm_provider": "mock",
                 "empty_source": False,
                 "hallucination": {"passed": True},
             },
@@ -178,8 +181,11 @@ class SummaryContractRegressionTests(unittest.TestCase):
             session_id=new_id("ses"), analyses=[record]
         )
         section = report["sections"][0]
-        self.assertFalse(section["summary_validation"]["trusted"])
-        self.assertNotIn("999", section["narrative"])
+        self.assertTrue(section["summary_validation"]["trusted"])
+        self.assertIn("999", section["narrative"])
+        self.assertTrue(
+            any(item["code"] == "SAVED_SUMMARY_REUSED" for item in report["warnings"])
+        )
 
 
 class ClientAndParameterRegressionTests(unittest.TestCase):
@@ -338,7 +344,7 @@ class AssistantAPIRegressionTests(unittest.TestCase):
         return app
 
     def test_payload_too_large_returns_413_in_standard_envelope(self):
-        ext.settings = SimpleNamespace(env="testing", assistant_api_key="")
+        ext.settings = SimpleNamespace(env="testing", assistant_api_key="", api_auth_enabled=False, api_auth_tokens="", api_auth_public_paths="/api/v1/health", rate_limit_enabled=False)
         response = self._app().test_client().post(
             "/api/v1/assistant/chat",
             data=b"x" * (2 * 1024 * 1024 + 1),
@@ -348,7 +354,7 @@ class AssistantAPIRegressionTests(unittest.TestCase):
         self.assertEqual(response.get_json()["code"], 413)
 
     def test_chat_rejects_malformed_or_non_object_json(self):
-        ext.settings = SimpleNamespace(env="testing", assistant_api_key="")
+        ext.settings = SimpleNamespace(env="testing", assistant_api_key="", api_auth_enabled=False, api_auth_tokens="", api_auth_public_paths="/api/v1/health", rate_limit_enabled=False)
         client = self._app().test_client()
         malformed = client.post(
             "/api/v1/assistant/chat", data="{", content_type="application/json"
@@ -364,7 +370,7 @@ class AssistantAPIRegressionTests(unittest.TestCase):
             def tools_meta(self):
                 return {"tools": []}
 
-        ext.settings = SimpleNamespace(env="testing", assistant_api_key="secret-key")
+        ext.settings = SimpleNamespace(env="testing", assistant_api_key="secret-key", api_auth_enabled=False, api_auth_tokens="", api_auth_public_paths="/api/v1/health", rate_limit_enabled=False)
         ext.application_service = FakeService()
         client = self._app().test_client()
         rejected = client.get("/api/v1/assistant/tools")
@@ -376,12 +382,12 @@ class AssistantAPIRegressionTests(unittest.TestCase):
         self.assertEqual(accepted.status_code, 200)
 
     def test_production_without_assistant_key_fails_closed(self):
-        ext.settings = SimpleNamespace(env="production", assistant_api_key="")
+        ext.settings = SimpleNamespace(env="production", assistant_api_key="", api_auth_enabled=False, api_auth_tokens="", api_auth_public_paths="/api/v1/health", rate_limit_enabled=False)
         response = self._app().test_client().get("/api/v1/assistant/tools")
         self.assertEqual(response.status_code, 503)
 
     def test_first_service_build_is_singleton_under_concurrency(self):
-        ext.settings = SimpleNamespace(env="testing", assistant_api_key="")
+        ext.settings = SimpleNamespace(env="testing", assistant_api_key="", api_auth_enabled=False, api_auth_tokens="", api_auth_public_paths="/api/v1/health", rate_limit_enabled=False)
         ext.application_service = None
         sentinel = object()
         build_count = 0

@@ -98,6 +98,7 @@ class MedicalAssistantService:
         session_store: SessionStore,
         report_service: MedicalReportService,
         llm_client=None,
+        ai_service=None,
         max_messages: int = 100,
         max_analyses: int = 20,
         max_reports: int = 10,
@@ -109,6 +110,8 @@ class MedicalAssistantService:
         self._store = session_store
         self._reports = report_service
         self._llm_client = llm_client  # 二期：unsupported 场景 grounded 回复
+        # Agent 编排服务（AIService）；未注入时 chat() 回退到本地规则流水线
+        self._ai_service = ai_service
         self._max_messages = max(4, int(max_messages))
         self._max_analyses = max(1, int(max_analyses))
         self._max_reports = max(1, int(max_reports))
@@ -278,6 +281,19 @@ class MedicalAssistantService:
             if not report_negated and _REPORT_TERM_RE.search(message):
                 generate_report = True
 
+            # 未注入 Agent 编排服务（单元测试/离线模式）时，
+            # 回退到本地规则意图识别 + 直接工具调用的轻量路径。
+            if self._ai_service is None:
+                return self._chat_local_pipeline(
+                    session,
+                    user_message,
+                    message=message,
+                    classified=classified,
+                    referenced=referenced,
+                    analysis_id=analysis_id,
+                    generate_report=generate_report,
+                )
+
             # ------------------------------------------------------------------
             # 核心变化：取消本地意图识别，直接交给 AIService(Agent) 端到端执行。
             #   LLM 负责规划工具、生成 Spark aggregation params（不生成裸 SQL）
@@ -384,6 +400,194 @@ class MedicalAssistantService:
             )
 
     # ------------------------------------------------------------------
+    # 本地回退流水线（未注入 AIService 时使用，如单元测试/离线模式）
+    # ------------------------------------------------------------------
+    def _chat_local_pipeline(
+        self,
+        session: ConversationSession,
+        user_message: ConversationMessage,
+        *,
+        message: str,
+        classified,
+        referenced: AnalysisRecord | None,
+        analysis_id: str | None = None,
+        generate_report: bool = False,
+    ) -> ChatResult:
+        """本地规则意图识别 → 直接工具调用 → 摘要生成的传统路径。"""
+        intent_key = classified.intent
+        params = copy.deepcopy(classified.params)
+        context_applied = False
+
+        if referenced is not None and (
+            analysis_id is not None or _REFERENCE_RE.search(message)
+        ):
+            intent_key, params, context_applied = self._merge_follow_up(
+                message, classified, referenced
+            )
+
+        intent_payload = self._intent_payload(
+            classified, intent_key, params, context_applied
+        )
+
+        if intent_key == "unsupported":
+            answer = (
+                "当前助手支持医疗数据聚合、总体统计、疾病关联、住院费用预测、"
+                "再入院风险和平台能力查询。请补充希望分析的维度或指标。"
+            )
+            assistant = self._append_assistant(
+                session, answer, user_message.id, status="unsupported"
+            )
+            context = self._context_payload(referenced, context_applied)
+            self._record_idempotent_response(
+                user_message,
+                status="unsupported",
+                intent=intent_payload,
+                warnings=[],
+                context=context,
+            )
+            self._save(session)
+            return ChatResult(
+                session_id=session.id,
+                status="unsupported",
+                user_message=user_message.to_dict(),
+                assistant_message=assistant.to_dict(),
+                intent=intent_payload,
+                context=context,
+                history_size=len(session.messages),
+            )
+
+        if intent_payload.get("missing_required"):
+            return self._clarification(
+                session,
+                user_message,
+                f"还需要补充以下分析条件：{', '.join(intent_payload['missing_required'])}。",
+                intent=intent_payload,
+                reason="missing_required_params",
+            )
+
+        try:
+            tool_result = self._execute_tool(intent_key, params)
+        except ToolParameterError as exc:
+            return self._clarification(
+                session,
+                user_message,
+                str(exc),
+                intent=intent_payload,
+                reason="tool_parameter_error",
+                missing=exc.missing,
+            )
+        except ToolInvocationError as exc:
+            warning = {
+                "code": "TOOL_INVOCATION_FAILED",
+                "tool": exc.tool_name,
+                "attempts": exc.attempts,
+                "trace_id": exc.trace_id,
+            }
+            answer = "分析服务暂时未能完成本次请求，请稍后重试。"
+            if exc.trace_id:
+                answer += f" 追踪编号：{exc.trace_id}。"
+            assistant = self._append_assistant(
+                session,
+                answer,
+                user_message.id,
+                status="failed",
+                metadata={"warning": warning},
+            )
+            context = self._context_payload(referenced, context_applied)
+            self._record_idempotent_response(
+                user_message,
+                status="failed",
+                intent=intent_payload,
+                warnings=[warning],
+                context=context,
+            )
+            self._save(session)
+            return ChatResult(
+                session_id=session.id,
+                status="failed",
+                user_message=user_message.to_dict(),
+                assistant_message=assistant.to_dict(),
+                intent=intent_payload,
+                warnings=[warning],
+                context=context,
+                history_size=len(session.messages),
+            )
+
+        intent_spec = INTENT_BY_KEY.get(intent_key)
+        summary = self._generator.generate(
+            user_query=message,
+            intent_label=intent_spec.label_cn if intent_spec else intent_key,
+            intent_key=intent_key,
+            analysis_result=tool_result.summary_data,
+        )
+        summary_dict = summary.to_dict() if hasattr(summary, "to_dict") else dict(summary)
+        local_warnings: list[dict[str, Any]] = []
+        answer = str(summary_dict.get("text") or "分析已完成。")
+        hallucination = summary_dict.get("hallucination") or {}
+        if hallucination.get("passed") is not True:
+            # 兼容旧摘要对象：无 prompt_only 标记时视为未过校验
+            local_warnings.append({
+                "code": "UNTRUSTED_SUMMARY",
+                "message": "自动摘要未通过数字一致性校验，请以结构化分析结果为准",
+            })
+            answer = "分析已完成，但自动摘要未通过数字一致性校验，请以结构化结果为准。"
+        elif summary_dict.get("fell_back_to_mock"):
+            local_warnings.append({
+                "code": "LLM_FALLBACK",
+                "message": "本次使用确定性模板生成摘要",
+            })
+
+        assistant = self._append_assistant(
+            session,
+            answer,
+            user_message.id,
+            intent=intent_key,
+            status="completed",
+            metadata={"warnings": local_warnings},
+        )
+        assembled = self._compact_result(tool_result.assembled_result())
+        record = AnalysisRecord(
+            id=new_id("ana"),
+            message_id=assistant.id,
+            query=message,
+            intent=intent_key,
+            tool_name=tool_result.tool_name,
+            tool_input=copy.deepcopy(tool_result.params),
+            result=assembled,
+            summary=summary_dict,
+            attempts=tool_result.attempts,
+            elapsed_seconds=tool_result.elapsed_seconds,
+        )
+        assistant.analysis_id = record.id
+        session.analyses.append(record)
+
+        report = None
+        if generate_report:
+            report = self._generate_report_locked(session, [record.id], title=None)
+            assistant.report_id = report["report_id"]
+        context = self._context_payload(referenced, context_applied)
+        self._record_idempotent_response(
+            user_message,
+            status="completed",
+            intent=intent_payload,
+            warnings=local_warnings,
+            context=context,
+        )
+        self._save(session)
+        return ChatResult(
+            session_id=session.id,
+            status="completed",
+            user_message=user_message.to_dict(),
+            assistant_message=assistant.to_dict(),
+            intent=intent_payload,
+            analysis=record.to_dict(),
+            report=report,
+            warnings=local_warnings,
+            context=context,
+            history_size=len(session.messages),
+        )
+
+    # ------------------------------------------------------------------
     # 会话与报告 API
     # ------------------------------------------------------------------
     def get_session(self, session_id: str, *, include_results: bool = False) -> dict[str, Any]:
@@ -471,12 +675,15 @@ class MedicalAssistantService:
         return None
 
     def _merge_follow_up(self, message, classified, previous: AnalysisRecord):
+        # 重构后分类器把无法规则匹配的输入（如“继续”“那去年呢”）归为
+        # freeform_query，与旧版 unsupported 同义：有引用时继承上次分析。
+        bare_follow_up = classified.intent in ("unsupported", "freeform_query")
         current = classified
-        if classified.intent == "unsupported" and previous.intent == "aggregation_query":
+        if bare_follow_up and previous.intent == "aggregation_query":
             probe = self._classifier.classify(f"按{message}分组")
             if probe.intent == "aggregation_query":
                 current = probe
-        if current.intent == "unsupported":
+        if bare_follow_up:
             return previous.intent, copy.deepcopy(previous.tool_input), True
         if current.intent != previous.intent:
             return current.intent, copy.deepcopy(current.params), False
@@ -1096,11 +1303,14 @@ class MedicalAssistantService:
 def build_application_service(settings, *, data_provider, cache, redis_client=None):
     """应用工厂使用的集中装配函数，所有依赖均可在单元测试中替换。"""
     from app.ai.intent.classifier import IntentClassifier
+    from app.ai.service import AIService
     from app.ai.summary.generator import SummaryGenerator
     from app.ai.summary.llm_client import build_client
     from app.application.clients import HTTPAnalysisClient, LocalAnalysisClient
 
     mode = str(getattr(settings, "analysis_api_mode", "local") or "local").lower()
+    aggregation_service = None
+    algorithm_service = None
     if mode == "http":
         analysis_client = HTTPAnalysisClient(
             getattr(settings, "analysis_api_base_url", ""),
@@ -1111,10 +1321,11 @@ def build_application_service(settings, *, data_provider, cache, redis_client=No
         from app.services.aggregation_service import AggregationService
         from app.services.algorithm_service import AlgorithmService
 
-        analysis_client = LocalAnalysisClient(
-            AggregationService(provider=data_provider, cache=cache, settings=settings),
-            AlgorithmService(provider=data_provider),
+        aggregation_service = AggregationService(
+            provider=data_provider, cache=cache, settings=settings
         )
+        algorithm_service = AlgorithmService(provider=data_provider)
+        analysis_client = LocalAnalysisClient(aggregation_service, algorithm_service)
     else:
         raise ValueError(f"不支持的 analysis_api_mode: {mode}")
 
@@ -1138,15 +1349,27 @@ def build_application_service(settings, *, data_provider, cache, redis_client=No
         summary_generator,
         max_analyses=int(getattr(settings, "report_max_analyses", 10)),
     )
+    intent_classifier = IntentClassifier(
+        min_confidence=float(getattr(settings, "intent_min_confidence", 0.45))
+    )
+    # 本地模式需把 Spark/算法服务交给 Agent 做工具规划；HTTP 模式由
+    # analysis_client 承担，Agent 侧服务留空（execute 时按 client 走）。
+    ai_service = AIService(
+        settings=settings,
+        aggregation_service=aggregation_service,
+        algorithm_service=algorithm_service,
+        intent_classifier=intent_classifier,
+        summary_generator=summary_generator,
+        llm_client=llm_client,
+    )
     return MedicalAssistantService(
-        intent_classifier=IntentClassifier(
-            min_confidence=float(getattr(settings, "intent_min_confidence", 0.45))
-        ),
+        intent_classifier=intent_classifier,
         summary_generator=summary_generator,
         tool_executor=executor,
         session_store=store,
         report_service=report_service,
         llm_client=llm_client,
+        ai_service=ai_service,
         max_messages=int(getattr(settings, "conversation_max_messages", 100)),
         max_analyses=int(getattr(settings, "conversation_max_analyses", 20)),
         max_reports=int(getattr(settings, "conversation_max_reports", 10)),
