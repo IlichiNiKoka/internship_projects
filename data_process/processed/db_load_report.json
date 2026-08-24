@@ -1,0 +1,31 @@
+{
+  "meta": {
+    "generated_at": "2026-08-23 19:29:04",
+    "source_csv": "D:\\项目联机版\\internship_projects-main\\data_process\\processed\\Hospital_Inpatient_Discharges__SPARCS_De-Identified___2021_20231012_clean.csv",
+    "target_engine": "mysql",
+    "target": "mysql://127.0.0.1:3306/medical_analytics/sparcs_discharge_2021",
+    "table": "sparcs_discharge_2021",
+    "batch_size": 10000,
+    "elapsed_seconds": 271.01,
+    "fallback_reason": null
+  },
+  "rows": {
+    "read_rows": 2095384,
+    "inserted_rows": 2094484,
+    "skipped_rows": 900
+  },
+  "indexes": [
+    "discharge_year",
+    "hospital_county",
+    "ccsr_diagnosis_code",
+    "age_group",
+    "gender",
+    "payment_typology_1"
+  ],
+  "unique_key": "row_hash",
+  "incremental": {
+    "mode": "row_hash_dedup",
+    "new_rows_inserted": 2094484,
+    "duplicate_rows_skipped": 900
+  }
+}

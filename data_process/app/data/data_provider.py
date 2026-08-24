@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from abc import ABC, abstractmethod
 
@@ -101,10 +102,15 @@ class SparkDataProvider(DataProvider):
         self._df: DataFrame | None = None
         self._row_count: int | None = None
         self._load_seconds: float | None = None
+        self._lock = threading.Lock()
 
     def dataframe(self) -> DataFrame:
+        # 双重检查锁：前端大屏首次打开会并发多个聚合请求，若不互斥，
+        # 会同时触发全量加载（200 万行），Spark local 模式下互相抢资源卡死。
         if self._df is None:
-            self._load()
+            with self._lock:
+                if self._df is None:
+                    self._load()
         return self._df
 
     def _load(self) -> None:
@@ -156,10 +162,14 @@ class MySQLDataProvider(DataProvider):
         self._df: DataFrame | None = None
         self._row_count: int | None = None
         self._load_seconds: float | None = None
+        self._lock = threading.Lock()
 
     def dataframe(self) -> DataFrame:
+        # 双重检查锁：防止前端大屏并发请求同时触发 MySQL 全表加载（200 万行）
         if self._df is None:
-            self._load()
+            with self._lock:
+                if self._df is None:
+                    self._load()
         return self._df
 
     def _jdbc_url(self) -> str:
@@ -173,7 +183,25 @@ class MySQLDataProvider(DataProvider):
                     url, self._settings.db_table)
         try:
             spark = _get_or_create_spark(self._settings)
-            df = (
+            s = self._settings
+            # 分区读取：先查询自增主键 id 上界，按 id 分片并行加载，
+            # 避免单分区全表扫描 200 万行导致耗时超过接口超时（本地实测约 234s > 120s）
+            max_id = None
+            try:
+                max_id = (
+                    spark.read.format("jdbc")
+                    .option("url", url)
+                    .option("dbtable", f"(SELECT MAX(id) AS m FROM {s.db_table}) t")
+                    .option("user", s.db_user)
+                    .option("password", s.db_password)
+                    .option("driver", s.mysql_jdbc_driver)
+                    .option("connectTimeout", str(s.mysql_jdbc_connect_timeout_ms))
+                    .load()
+                    .collect()[0][0]
+                )
+            except Exception:  # 老表无 id 主键时忽略，退回单分区加载
+                logger.warning("MySQL 分区读取不可用（无 id 主键？），退回单分区加载")
+            reader = (
                 spark.read.format("jdbc")
                 .option("url", url)
                 .option("dbtable", self._settings.db_table)
@@ -181,8 +209,16 @@ class MySQLDataProvider(DataProvider):
                 .option("password", self._settings.db_password)
                 .option("driver", self._settings.mysql_jdbc_driver)
                 .option("connectTimeout", str(self._settings.mysql_jdbc_connect_timeout_ms))
-                .load()
             )
+            if max_id is not None:
+                reader = (
+                    reader
+                    .option("partitionColumn", "id")
+                    .option("lowerBound", "1")
+                    .option("upperBound", str(int(max_id) + 1))
+                    .option("numPartitions", "8")
+                )
+            df = reader.load()
             # 入库表含 id / row_hash 系统列，此处只取 33 个业务字段并对齐标准 schema
             df = _cast_to_schema(df)
             df = df.cache()
@@ -225,10 +261,14 @@ class HDFSDataProvider(DataProvider):
         self._df: DataFrame | None = None
         self._row_count: int | None = None
         self._load_seconds: float | None = None
+        self._lock = threading.Lock()
 
     def dataframe(self) -> DataFrame:
+        # 双重检查锁：防止前端大屏并发请求同时触发 HDFS 全量加载
         if self._df is None:
-            self._load()
+            with self._lock:
+                if self._df is None:
+                    self._load()
         return self._df
 
     def _hdfs_url(self) -> str:

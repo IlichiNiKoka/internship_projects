@@ -156,7 +156,7 @@ class RedisCacheBackend(CacheBackend):
             "host": host,
             "port": int(port),
             "db": int(db),
-            "connect_timeout": float(connect_timeout),
+            "socket_connect_timeout": float(connect_timeout),
             "socket_timeout": float(socket_timeout),
             "decode_responses": False,
         }

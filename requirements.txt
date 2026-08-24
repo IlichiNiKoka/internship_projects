@@ -18,14 +18,16 @@ python-dotenv==1.2.2
 # ---- 数据库入库（人员2 · 二期：MySQL 优先，SQLite 兜底）----
 # PyMySQL：纯 Python 的 MySQL 驱动；SQLite 走 Python 标准库，无需额外依赖
 PyMySQL>=1.1
+# 注意：Spark JDBC 读 MySQL 还需要 mysql-connector-java jar（非 pip 包），
+# 请将 jar（如 mysql-connector-java-8.0.30.jar）放入 <pyspark>/jars/ 目录，
+# 否则聚合接口会报 ClassNotFoundException: com.mysql.cj.jdbc.Driver
 
 # ---- 大数据计算引擎 ----
 # Spark 3.5.1 官方支持 Python 3.8~3.12，兼容 Java 8/11/17
 pyspark==3.5.1
 
-# ---- 二期 3.3.4：Redis 缓存后端（可选依赖）----
-# 需要跨进程共享缓存时安装；未安装时服务自动降级为进程内缓存：
-# redis>=5.0
+# ---- 二期 3.3.4：Redis（正式依赖：结果缓存 + 多轮会话持久化）----
+# redis-py：未安装时服务自动降级为进程内缓存；建议安装以启用 Redis 模式。
 
 # ---- AI 智能层（人员4：意图识别 / 文本生成）----
 # 通过 OpenAI 兼容协议接入 DeepSeek（base_url=https://api.deepseek.com/v1）
