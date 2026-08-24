@@ -100,6 +100,8 @@ def build_spark_session(settings: Settings) -> SparkSession:
         .master(settings.spark_master)
         .config("spark.driver.memory", settings.spark_driver_memory)
         .config("spark.sql.shuffle.partitions", settings.spark_shuffle_partitions)
+        # MySQL JDBC 驱动（Spark 读取 MySQL 所需）
+        .config("spark.jars.packages", "com.mysql:mysql-connector-j:8.4.0")
         # 二期 3.3.4：Spark SQL AQE 自适应执行（动态合并 shuffle 分区，减少小任务开销）
         .config("spark.sql.adaptive.enabled",
                 "true" if settings.spark_adaptive_enabled else "false")

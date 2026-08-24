@@ -126,7 +126,7 @@ class Settings:
     llm_model: str = "deepseek-chat"
     llm_timeout: int = 30                  # 单次 LLM 调用超时（秒）
     llm_temperature: float = 0.2           # 低温度减少幻觉
-    llm_max_tokens: int = 800              # 文本生成最大 token
+    llm_max_tokens: int = 4000             # 文本生成最大 token（DeepSeek V4 Flash 需更大 token 防止思考内容被截断）
     # 意图识别：达标阈值（低于此值时分类器输出 unsupported）
     intent_min_confidence: float = 0.45
     # 文本生成幻觉检查：原文数字与生成文本数字允许的相对误差
