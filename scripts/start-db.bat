@@ -4,6 +4,7 @@ rem  One-click start: MySQL + Redis
 rem  USAGE:
 rem    1. Edit the 3 paths below to match YOUR local machine
 rem    2. Double-click this file, or run it from cmd/PowerShell
+rem  Full instructions / FAQ: see scripts/README.md
 rem  NOTE: ASCII-only comments (cmd/GBK safe). If your paths are
 rem  pure ASCII you do NOT need the old "subst Z:" trick anymore.
 rem ============================================================

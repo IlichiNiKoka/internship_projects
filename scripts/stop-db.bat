@@ -4,6 +4,7 @@ rem  One-click stop: MySQL + Redis (run this as normal user)
 rem  USAGE:
 rem    1. Edit the paths below to match YOUR local machine
 rem    2. Double-click this file, or run it from cmd/PowerShell
+rem  Full instructions / FAQ: see scripts/README.md
 rem  Graceful shutdown ONLY. Never kill mysqld / redis-server
 rem  via Task Manager or "taskkill /F" - that leaves redo logs
 rem  and pid files behind and slows down the next startup.
