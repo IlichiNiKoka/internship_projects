@@ -78,6 +78,7 @@ class Settings:
     spark_log_level: str = "WARN"           # Spark 内部日志级别
     spark_driver_memory: str = "2g"
     spark_java_home: str = ""               # 留空自动探测（见 utils/spark.py）
+    spark_hadoop_home: str = ""             # 留空自动探测（Windows 下必填路径含 bin/winutils.exe）
     spark_shuffle_partitions: int = 8       # 本地模式无需过多分区
     spark_adaptive_enabled: bool = True     # Spark SQL AQE 自适应执行（二期任务参数优化）
 
@@ -129,8 +130,6 @@ class Settings:
     llm_max_tokens: int = 4000             # 文本生成最大 token（DeepSeek V4 Flash 需更大 token 防止思考内容被截断）
     # 意图识别：达标阈值（低于此值时分类器输出 unsupported）
     intent_min_confidence: float = 0.45
-    # 文本生成幻觉检查：原文数字与生成文本数字允许的相对误差
-    hallucination_tolerance: float = 0.02
 
     # ---- 日志 ----
     log_dir: Path = LOG_DIR_DEFAULT

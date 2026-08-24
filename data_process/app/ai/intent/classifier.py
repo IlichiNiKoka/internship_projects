@@ -18,13 +18,12 @@
   * 模糊查询：基于子串匹配 + 长度容差（3.X.4 大数据模糊查询）；
   * 医疗术语联想：synonym 反向索引（3.X.4 医疗术语联想）。
 
-TODO (Phase 2 - 意图识别优化，准确率>=90%）：
-  1. 替换为 ML 模型分类器（如基于 BERT/Transformer 的文本分类）
-  2. 支持模糊查询：编辑距离/语义相似度匹配，处理拼写错误、口语表达
-  3. 支持多意图识别：单次查询可能包含多个意图
-  4. 医疗术语联想增强：引入医疗知识图谱/术语库（UMLS/ICD/SNOMED）
-  5. 闲聊/非业务查询识别与礼貌拒答
-  6. 置信度校准：temperature scaling / Platt scaling 提升置信度可靠性
+Phase 2 增强（已实现，见 llm_classifier.py）：
+  1. LLM 分类器：规则引擎不命中时回退到 LLM，天然处理拼写错误/口语表达；
+  2. 多意图识别：classify_multi() 使用 LLM 识别单次查询中的多个意图；
+  3. 闲聊/非业务查询：LLM prompt 指示返回 unsupported；
+  4. 医疗术语联想：LLM prompt 包含完整维度/指标词典。
+  待办（需额外基础设施）：BERT/Transformer 本地模型、置信度校准。
 """
 from __future__ import annotations
 
@@ -170,18 +169,6 @@ def _extract_metrics(query: str) -> tuple[list[str], list[str]]:
     return metrics, matched
 
 
-def _is_unsupported(query: str) -> bool:
-    """检测明显不属于医疗大数据分析范围的输入。"""
-    unsupported_signals = [
-        "天气", "机票", "订票", "火车票", "笑话", "故事",
-        "翻译", "减肥", "炒股票", "股票", "推荐书", "推荐电影",
-        "你是谁", "你是", "今天几号", "几点", "北京有什么",
-        "景点", "旅游", "美食",
-    ]
-    q = query.lower()
-    return any(s in q for s in unsupported_signals)
-
-
 # ---------------------------------------------------------------------------
 # 公开入口
 # ---------------------------------------------------------------------------
@@ -201,17 +188,22 @@ class IntentClassifier:
 
     # ------------------------------------------------------------------
     def classify(self, query: str) -> IntentResult:
-        """对用户自然语言输入做意图识别。"""
+        """对用户自然语言输入做意图识别。
+
+        策略：
+        1. 规则引擎只做强信号匹配（关键词/维度/指标），不做基于主题的硬拒绝；
+        2. 无明确信号时返回 freeform_query（置信度=0.35，LLM 增强分类器会自动接管），
+           交由 LLM 基于完整维度/指标词典决定能否用数据回答，或确实判为 unsupported；
+        3. 空输入单独兜底。
+        """
         raw = query or ""
         text = _normalize_query(raw)
         signals: dict[str, list[str]] = {}
         params: dict[str, Any] = {}
 
-        # ---- 0. 空输入 / 不支持主题 ----
+        # ---- 0. 空输入 ----
         if not text:
             return self._build(raw, "unsupported", 0.0, params, signals, ["query"])
-        if _is_unsupported(text):
-            return self._build(raw, "unsupported", 0.95, params, signals, ["unsupported_signals"])
 
         # ---- 1. 抽取维度 / 指标 / 过滤 ----
         dims, dim_hits, filters = _extract_dimensions(text)
@@ -325,7 +317,11 @@ class IntentClassifier:
 
         # ---- 3. 选择最高分意图 ----
         if not scores:
-            return self._build(raw, "unsupported", 0.4, params, signals, ["no_signal"])
+            # 规则引擎无信号：不直接拒绝，返回 freeform_query 让 LLM 接管，
+            # 由 LLM 基于完整维度/指标词典决定能否映射到数据或确实 unsupported。
+            signals["no_signal"] = ["rule_no_hit"]
+            params = self._build_params("freeform_query", dims, metrics, filters, text)
+            return self._build(raw, "freeform_query", 0.35, params, signals, ["rule_fallback_freeform"])
 
         top_intent = max(scores.items(), key=lambda kv: kv[1])
         intent, confidence = top_intent
@@ -360,10 +356,11 @@ class IntentClassifier:
                 confidence = max(scores.get("association_analysis", 0), 0.78)
                 matched_signals["association_analysis"] = ["病+操作模式"]
 
-        # 未达置信度阈值 -> 兜底
+        # 未达置信度阈值 -> 不直接拒答，交给 LLM 重新识别
         if confidence < self._min_confidence:
-            return self._build(raw, "unsupported", confidence, params, signals,
-                              [f"below_threshold({self._min_confidence})"])
+            params = self._build_params("freeform_query", dims, metrics, filters, text)
+            return self._build(raw, "freeform_query", confidence, params, signals,
+                              [f"rule_below_threshold({self._min_confidence})"])
 
         # ---- 4. 抽取参数 ----
         params = self._build_params(intent, dims, metrics, filters, text)
@@ -461,6 +458,18 @@ class IntentClassifier:
                 params["kind"] = "metrics"
             elif "算法" in text:
                 params["kind"] = "algorithms"
+
+        elif intent == "freeform_query":
+            # 规则引擎能抽到什么就先带上，LLM 会在增强分类阶段重新补全
+            if dims:
+                params["dimensions"] = dims
+            if metrics:
+                params["metrics"] = metrics
+            if filters:
+                params["filters"] = filters
+            topn_match = re.search(r"(?:top|前)\s*(\d+)", text)
+            if topn_match:
+                params["top_n"] = int(topn_match.group(1))
 
         return params
 

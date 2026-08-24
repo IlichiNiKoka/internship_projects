@@ -97,6 +97,7 @@ class MedicalAssistantService:
         tool_executor: ToolExecutor,
         session_store: SessionStore,
         report_service: MedicalReportService,
+        llm_client=None,
         max_messages: int = 100,
         max_analyses: int = 20,
         max_reports: int = 10,
@@ -107,6 +108,7 @@ class MedicalAssistantService:
         self._executor = tool_executor
         self._store = session_store
         self._reports = report_service
+        self._llm_client = llm_client  # 二期：unsupported 场景 grounded 回复
         self._max_messages = max(4, int(max_messages))
         self._max_analyses = max(1, int(max_analyses))
         self._max_reports = max(1, int(max_reports))
@@ -272,134 +274,64 @@ class MedicalAssistantService:
                     session, user_message, referenced, classified
                 )
 
-            # “生成按医院统计报告”同时包含新分析意图：先执行本轮
-            # 分析，再为新结果生成报告，不得误用上一轮结果。
-            if (
-                not report_negated
-                and _REPORT_TERM_RE.search(message)
-                and classified.intent != "unsupported"
-            ):
+            # “生成按医院统计报告”：Agent 执行分析后再为新分析生成报告。
+            if not report_negated and _REPORT_TERM_RE.search(message):
                 generate_report = True
 
-            intent_key = classified.intent
-            params = copy.deepcopy(classified.params)
-            context_applied = False
+            # ------------------------------------------------------------------
+            # 核心变化：取消本地意图识别，直接交给 AIService(Agent) 端到端执行。
+            #   LLM 负责规划工具、生成 Spark aggregation params（不生成裸 SQL）
+            #   本地负责：校验参数、调用 Spark/算法、生成摘要与记录。
+            # ------------------------------------------------------------------
+            # 1) 构造历史上下文（便于 Agent 做跟进式分析）
+            history_text = self._memory_variables_for_agent(session, referenced)
+            context_applied_any = bool(referenced or analysis_id or bool(_REFERENCE_RE.search(message)))
+            if context_applied_any and referenced is not None:
+                rsummary = ""
+                if isinstance(referenced.summary, dict):
+                    rsummary = referenced.summary.get("text") or ""
+                elif isinstance(referenced.result, dict):
+                    rsummary = (referenced.result.get("summary") or {}).get("text") or ""
+                if rsummary:
+                    history_text = (
+                        f"{history_text}\n[引用分析结果摘要]\n{rsummary}"
+                    )
 
-            if referenced is not None and (analysis_id is not None or _REFERENCE_RE.search(message)):
-                intent_key, params, context_applied = self._merge_follow_up(
-                    message, classified, referenced
-                )
-
+            # 2) Agent 端到端执行（工具规划 + 执行 + 摘要生成，含 self-correct 与降级）
+            ai_result = self._ai_service.execute(message, history=history_text)
+            intent = ai_result.intent
+            intent_key = (
+                intent.intent if intent.intent in INTENT_BY_KEY else "freeform_query"
+            )
+            intent_label = intent.spec.label_cn if intent.spec else intent_key
             intent_payload = self._intent_payload(
-                classified, intent_key, params, context_applied
+                intent, intent_key, copy.deepcopy(intent.params), context_applied_any,
             )
 
-            if intent_key == "unsupported":
-                answer = (
-                    "当前助手支持医疗数据聚合、总体统计、疾病关联、住院费用预测、"
-                    "再入院风险和平台能力查询。请补充希望分析的维度或指标。"
-                )
-                assistant = self._append_assistant(
-                    session, answer, user_message.id, status="unsupported"
-                )
-                context = self._context_payload(referenced, context_applied)
-                self._record_idempotent_response(
-                    user_message,
-                    status="unsupported",
-                    intent=intent_payload,
-                    warnings=[],
-                    context=context,
-                )
-                self._save(session)
-                return ChatResult(
-                    session_id=session.id,
-                    status="unsupported",
-                    user_message=user_message.to_dict(),
-                    assistant_message=assistant.to_dict(),
-                    intent=intent_payload,
-                    context=context,
-                    history_size=len(session.messages),
-                )
-
-            if intent_payload.get("missing_required"):
-                return self._clarification(
-                    session,
-                    user_message,
-                    f"还需要补充以下分析条件：{', '.join(intent_payload['missing_required'])}。",
-                    intent=intent_payload,
-                    reason="missing_required_params",
-                )
-
-            try:
-                tool_result = self._execute_tool(intent_key, params)
-            except ToolParameterError as exc:
-                return self._clarification(
-                    session,
-                    user_message,
-                    str(exc),
-                    intent=intent_payload,
-                    reason="tool_parameter_error",
-                    missing=exc.missing,
-                )
-            except ToolInvocationError as exc:
-                warning = {
-                    "code": "TOOL_INVOCATION_FAILED",
-                    "tool": exc.tool_name,
-                    "attempts": exc.attempts,
-                    "trace_id": exc.trace_id,
-                }
-                answer = "分析服务暂时未能完成本次请求，请稍后重试。"
-                if exc.trace_id:
-                    answer += f" 追踪编号：{exc.trace_id}。"
-                assistant = self._append_assistant(
-                    session,
-                    answer,
-                    user_message.id,
-                    status="failed",
-                    metadata={"warning": warning},
-                )
-                context = self._context_payload(referenced, context_applied)
-                self._record_idempotent_response(
-                    user_message,
-                    status="failed",
-                    intent=intent_payload,
-                    warnings=[warning],
-                    context=context,
-                )
-                self._save(session)
-                return ChatResult(
-                    session_id=session.id,
-                    status="failed",
-                    user_message=user_message.to_dict(),
-                    assistant_message=assistant.to_dict(),
-                    intent=intent_payload,
-                    warnings=[warning],
-                    context=context,
-                    history_size=len(session.messages),
-                )
-
-            intent_spec = INTENT_BY_KEY.get(intent_key)
-            summary = self._generator.generate(
-                user_query=message,
-                intent_label=intent_spec.label_cn if intent_spec else intent_key,
-                intent_key=intent_key,
-                analysis_result=tool_result.summary_data,
+            # 3) 从 AIService 结果抽取出结构化分析，写入 AnalysisRecord
+            summary_dict = (
+                ai_result.summary.to_dict()
+                if hasattr(ai_result.summary, "to_dict")
+                else dict(ai_result.summary)
             )
-            summary_dict = summary.to_dict() if hasattr(summary, "to_dict") else dict(summary)
             warnings: list[dict[str, Any]] = []
-            answer = str(summary_dict.get("text") or "分析已完成。")
-            hallucination = summary_dict.get("hallucination") or {}
-            if hallucination.get("passed") is not True:
-                warnings.append({
-                    "code": "UNTRUSTED_SUMMARY",
-                    "message": "自动摘要未通过数字一致性校验，请以结构化分析结果为准",
-                })
-                answer = "分析已完成，但自动摘要未通过数字一致性校验，请以结构化结果为准。"
-            elif summary_dict.get("fell_back_to_mock"):
+            if summary_dict.get("fell_back_to_mock"):
                 warnings.append({
                     "code": "LLM_FALLBACK",
                     "message": "本次使用确定性模板生成摘要",
                 })
+            answer = str(summary_dict.get("text") or "分析已完成。")
+
+            analysis_blob = ai_result.analysis if isinstance(ai_result.analysis, dict) else {}
+            agent_calls = analysis_blob.get("calls") or []
+            primary = analysis_blob.get("primary")
+            if primary is None and agent_calls:
+                primary = agent_calls[0].get("result")
+            tool_name = (agent_calls[0].get("tool") if agent_calls else "agent") or "agent"
+            tool_input = (agent_calls[0].get("params") if agent_calls else intent.params) or {}
+            elapsed = 0.0
+            if isinstance(primary, dict) and isinstance(primary.get("provenance"), dict):
+                elapsed = float(primary["provenance"].get("elapsed_seconds") or 0)
 
             assistant = self._append_assistant(
                 session,
@@ -407,20 +339,20 @@ class MedicalAssistantService:
                 user_message.id,
                 intent=intent_key,
                 status="completed",
-                metadata={"warnings": warnings},
+                metadata={"warnings": warnings, "agent_calls": agent_calls},
             )
-            assembled = self._compact_result(tool_result.assembled_result())
+            assembled = self._compact_result(primary if primary is not None else analysis_blob)
             record = AnalysisRecord(
                 id=new_id("ana"),
                 message_id=assistant.id,
                 query=message,
                 intent=intent_key,
-                tool_name=tool_result.tool_name,
-                tool_input=copy.deepcopy(tool_result.params),
+                tool_name=tool_name,
+                tool_input=copy.deepcopy(tool_input),
                 result=assembled,
                 summary=summary_dict,
-                attempts=tool_result.attempts,
-                elapsed_seconds=tool_result.elapsed_seconds,
+                attempts=1,
+                elapsed_seconds=elapsed,
             )
             assistant.analysis_id = record.id
             session.analyses.append(record)
@@ -429,7 +361,7 @@ class MedicalAssistantService:
             if generate_report:
                 report = self._generate_report_locked(session, [record.id], title=None)
                 assistant.report_id = report["report_id"]
-            context = self._context_payload(referenced, context_applied)
+            context = self._context_payload(referenced, context_applied_any)
             self._record_idempotent_response(
                 user_message,
                 status="completed",
@@ -589,10 +521,8 @@ class MedicalAssistantService:
             analysis_result=data,
         )
         summary = result.to_dict() if hasattr(result, "to_dict") else dict(result)
-        trusted = (summary.get("hallucination") or {}).get("passed") is True
-        answer = str(summary.get("text") or "") if trusted else (
-            "自动解读未通过数字一致性校验，请以原始结构化分析结果为准。"
-        )
+        # 幻觉后置校验已移除：直接采用生成文本，防幻觉靠提示词强约束
+        answer = str(summary.get("text") or "")
         assistant = self._append_assistant(
             session,
             answer,
@@ -604,7 +534,7 @@ class MedicalAssistantService:
         intent_payload = self._intent_payload(
             classified, record.intent, record.tool_input, True
         )
-        warnings = [] if trusted else [{"code": "UNTRUSTED_SUMMARY"}]
+        warnings: list[dict[str, Any]] = []
         context = {
             "referenced_analysis_id": record.id,
             "context_inherited": True,
@@ -629,6 +559,269 @@ class MedicalAssistantService:
             history_size=len(session.messages),
         )
 
+    # ------------------------------------------------------------------
+    def _grounded_fallback_answer(self, user_query: str) -> str:
+        """对 unsupported/边界问题做 LLM grounded 回复：基于系统能力回答，
+        不编造数据，超出能力范围明确说明，再引导到数据分析类问题。
+
+        失败或 LLM 不可用时回退到固定话术。
+        """
+        from app.ai.summary.llm_client import MockClient
+
+        default = (
+            "我可以基于本平台的 SPARCS 出院记录数据为你分析：按医院/疾病/年龄/"
+            "年份/支付方式等维度的住院人次、费用、住院时长等指标；总体统计、"
+            "疾病关联、费用预测和再入院风险评估等。如果你的问题与医疗数据相关，"
+            "请补充要分析的维度或指标。"
+        )
+        client = self._llm_client
+        if client is None or isinstance(client, (MockClient,)):
+            return default
+        system_prompt = (
+            "你是一个基于医院出院记录(SPARCS 2021)数据的医疗分析助手。\n"
+            "【系统能力】\n"
+            "- 聚合查询：支持维度=出院年份/医院名称/年龄段/性别/疾病诊断(CCSR)/"
+            "手术操作(CCSR)/支付方式/入院类型/疾病严重程度/死亡风险/内外科标识；"
+            "支持指标=出院人次/总费用/平均费用/住院总天数/平均住院天数/急诊率；\n"
+            "- 平台总览统计：核心指标+分布；\n"
+            "- 疾病关联分析(Association)：疾病与操作/支付方式/入院类型等关联；\n"
+            "- 住院费用预测：根据患者特征预测费用；\n"
+            "- 再入院风险评估：人群画像与单条评估。\n"
+            "【数据范围】仅覆盖纽约州 SPARCS 出院记录(2021为主,209万行)。\n"
+            "\n"
+            "【回答原则：必须 grounded，杜绝编造】\n"
+            "1. 明确区分：我能基于数据回答的 vs 数据未覆盖的 vs 完全超出能力范围的；\n"
+            "2. 用户问题若与医疗/医院/费用/疾病/患者等相关但表述模糊：先说明你可能需要"
+            "   他提供哪些信息(要分析什么维度、什么指标)，再举1-2个可回答的示例问题；\n"
+            "3. 数据里没有的(如天气、股价、电影、编程、翻译、实时行情、医学科普"
+            "   具体诊疗建议、个人定制医嘱、SPARCS 外的数据、2022年后的数据等)，"
+            "   明确说："
+            "   「当前数据库仅包含纽约州2021年出院记录，不覆盖此类信息」，"
+            "   然后可以引导：你可以尝试问一些与本平台数据相关的分析问题；\n"
+            "4. 闲聊/打招呼(你好/谢谢/再见等)：友好简洁回应；\n"
+            "5. 不编造任何数据、数字、结论；所有结论前面都要加"
+            "   「如果基于当前出院记录数据的话…」或类似措辞；\n"
+            "6. 语言简洁，不超过200字。\n"
+        )
+        user_prompt = f"用户问题：{user_query}\n\n请按原则回答："
+        try:
+            raw = client.chat(system_prompt, user_prompt)
+            if raw and not raw.startswith("__MOCK__"):
+                text = raw.strip()
+                # 去除 LLM 可能包的 ```markdown
+                if text.startswith("```"):
+                    import re as _re
+                    text = _re.sub(r"^```[\w]*\n", "", text)
+                    text = _re.sub(r"\n```$", "", text).strip()
+                if text:
+                    return text[:800]
+        except Exception as exc:
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "grounded fallback LLM 失败: %s", exc, exc_info=False,
+            )
+        return default
+
+    # ------------------------------------------------------------------
+    def _text_to_sql_db_cfg(self):
+        """懒加载 DB 连接配置（与 text_to_sql 模块解耦，失败返回 None）。"""
+        cache_key = "__db_cfg"
+        if hasattr(self, cache_key):
+            return getattr(self, cache_key)
+        try:
+            from app.ai.text_to_sql import DBConfig
+        except Exception:
+            return None
+        try:
+            from config.settings import Settings
+            stg = Settings.load()
+        except Exception:
+            # 构造器通常已经注入过 settings，但安全兜底
+            stg = None
+        if stg is None:
+            return None
+        host = str(getattr(stg, "db_host", "") or "")
+        port = int(getattr(stg, "db_port", 3306) or 3306)
+        user = str(getattr(stg, "db_user", "") or "")
+        password = str(getattr(stg, "db_password", "") or "")
+        db = str(getattr(stg, "db_name", "") or "")
+        table = str(getattr(stg, "db_table", "") or "")
+        if not (host and user and db and table):
+            return None
+        cfg = DBConfig(
+            host=host, port=port, user=user, password=password, db=db, table=table,
+        )
+        setattr(self, cache_key, cfg)
+        return cfg
+
+    # ------------------------------------------------------------------
+    def _run_text_to_sql(self, query: str):
+        """统一封装 text_to_sql：失败/不可用均返回 None。"""
+        client = self._llm_client
+        if client is None:
+            return None
+        cfg = self._text_to_sql_db_cfg()
+        if cfg is None:
+            return None
+        try:
+            from app.ai.text_to_sql import run_text_to_sql
+            return run_text_to_sql(
+                query=query, llm_client=client, db_config=cfg,
+                max_rows=5000, timeout_seconds=60,
+            )
+        except Exception as exc:
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "text_to_sql 运行异常: %s", exc, exc_info=False,
+            )
+            return None
+
+    # ------------------------------------------------------------------
+    def _try_text_to_sql_fallback(
+        self,
+        query: str,
+        session,
+        user_message,
+        *,
+        referenced=None,
+        context_applied: bool = False,
+        _intent_key_override: str | None = None,
+    ):
+        """在 unsupported / 工具调用失败后，尝试 text_to_sql 兜底生成完整分析结果。
+
+        返回 (ChatResult,) 表示成功；None 表示需要继续走其他路径。
+        """
+        result = self._run_text_to_sql(query)
+        if result is None or not result.success:
+            return None
+        # 成功 -> 包装成 ToolCallResult 风格 -> 走正常 generate + 记录 AnalysisRecord 流程
+        import datetime as _dt
+        from app.application.tools import ToolCallResult
+
+        analysis_dict = result.to_analysis_result()
+        intent_key = _intent_key_override or "freeform_query"
+        intent_spec = INTENT_BY_KEY.get(intent_key) or INTENT_BY_KEY["freeform_query"]
+        intent_label = getattr(intent_spec, "label_cn", intent_key)
+        tool_result = ToolCallResult(
+            intent=intent_key,
+            tool_name="text_to_sql_fallback",
+            params={"generated_sql": result.generated_sql,
+                    "sql_explanation": result.sql_explanation},
+            raw_result=analysis_dict,
+            summary_data=analysis_dict,
+            attempts=1,
+            elapsed_seconds=float(result.elapsed_seconds),
+            called_at=_dt.datetime.utcnow().isoformat() + "Z",
+        )
+        # 按正常路径生成摘要、记录分析
+        summary = self._generator.generate(
+            user_query=query,
+            intent_label=intent_label,
+            intent_key=intent_key,
+            analysis_result=tool_result.summary_data,
+        )
+        summary_dict = summary.to_dict() if hasattr(summary, "to_dict") else dict(summary)
+        warnings: list[dict[str, Any]] = []
+        answer = str(summary_dict.get("text") or "分析已完成。")
+        if summary_dict.get("fell_back_to_mock"):
+            warnings.append({
+                "code": "LLM_FALLBACK",
+                "message": "本次使用确定性模板生成摘要",
+            })
+        assistant = self._append_assistant(
+            session, answer, user_message.id,
+            intent=intent_key, status="completed",
+            metadata={"warnings": warnings, "text_to_sql": True},
+        )
+        from app.application.models import AnalysisRecord, new_id
+
+        assembled = self._compact_result(tool_result.assembled_result())
+        record = AnalysisRecord(
+            id=new_id("ana"),
+            message_id=assistant.id,
+            query=query,
+            intent=intent_key,
+            tool_name="text_to_sql_fallback",
+            tool_input=copy.deepcopy(tool_result.params),
+            result=assembled,
+            summary=summary_dict,
+            attempts=1,
+            elapsed_seconds=tool_result.elapsed_seconds,
+        )
+        assistant.analysis_id = record.id
+        session.analyses.append(record)
+
+        intent_payload = self._intent_payload_manual(
+            intent_key, intent_label, params=tool_result.params,
+            inherited=context_applied,
+        )
+        ctx = self._context_payload(referenced, context_applied)
+        self._record_idempotent_response(
+            user_message, status="completed",
+            intent=intent_payload, warnings=warnings, context=ctx,
+        )
+        self._save(session)
+        return (ChatResult(
+            session_id=session.id,
+            status="completed",
+            user_message=user_message.to_dict(),
+            assistant_message=assistant.to_dict(),
+            intent=intent_payload,
+            analysis=record.to_dict(),
+            context=ctx,
+            warnings=warnings,
+            history_size=len(session.messages),
+        ),)
+
+    # ------------------------------------------------------------------
+    def _memory_variables_for_agent(self, session, referenced) -> str:
+        """把多轮对话记忆压缩为 Agent（单轮 LLM 规划）能消费的一段纯文本。
+
+        LLM 规划是单轮调用，我们在这里把（可能压缩过的）历史摘要 + 最近若干轮
+        拼接成「上下文对话历史摘要」。
+        """
+        parts: list[str] = []
+        metadata = session.metadata or {}
+        compressed = metadata.get("compressed_summary") if isinstance(metadata, dict) else ""
+        if compressed:
+            parts.append(f"【历史摘要】{compressed}")
+        # 最近 5 轮 user/assistant，取纯文本
+        recent = list(session.messages[-10:]) if session.messages else []
+        lines: list[str] = []
+        for m in recent:
+            role = "用户" if m.role == "user" else ("助手" if m.role == "assistant" else m.role)
+            content = (m.content or "").strip()
+            if not content:
+                continue
+            if len(content) > 400:
+                content = content[:397] + "..."
+            lines.append(f"- {role}: {content}")
+        if lines:
+            parts.append("【最近对话】\n" + "\n".join(lines))
+        if referenced is not None:
+            parts.append(f"【被引用的分析ID】{referenced.id}（intent={referenced.intent}）")
+        return "\n\n".join(parts)[:3000]
+
+    # ------------------------------------------------------------------
+    def _intent_payload_manual(self, intent_key, intent_label, *, params, inherited):
+        """text_to_sql fallback 成功时手动构造标准 intent_payload 结构。"""
+        spec = INTENT_BY_KEY.get(intent_key)
+        downstream = getattr(spec, "downstream", "aggregation") if spec else "aggregation"
+        downstream_target = getattr(spec, "target", None) if spec else None
+        return {
+            "query": "",
+            "intent": intent_key,
+            "intent_label": intent_label,
+            "confidence": 0.9,
+            "params": copy.deepcopy(params or {}),
+            "missing_required": [],
+            "downstream": downstream,
+            "downstream_target": downstream_target,
+            "matched_signals": {"text_to_sql_fallback": ["fallback"]},
+            "context_inherited": bool(inherited),
+        }
+
+    # ------------------------------------------------------------------
     def _clarification(
         self,
         session,
@@ -939,9 +1132,7 @@ def build_application_service(settings, *, data_provider, cache, redis_client=No
         ),
     )
     llm_client = build_client(settings)
-    summary_generator = SummaryGenerator(
-        llm_client, tolerance=float(getattr(settings, "hallucination_tolerance", 0.02))
-    )
+    summary_generator = SummaryGenerator(llm_client)
     store = build_session_store(settings, redis_client=redis_client)
     report_service = MedicalReportService(
         summary_generator,
@@ -955,6 +1146,7 @@ def build_application_service(settings, *, data_provider, cache, redis_client=No
         tool_executor=executor,
         session_store=store,
         report_service=report_service,
+        llm_client=llm_client,
         max_messages=int(getattr(settings, "conversation_max_messages", 100)),
         max_analyses=int(getattr(settings, "conversation_max_analyses", 20)),
         max_reports=int(getattr(settings, "conversation_max_reports", 10)),

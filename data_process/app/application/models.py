@@ -93,6 +93,7 @@ class ConversationSession:
     messages: list[ConversationMessage] = field(default_factory=list)
     analyses: list[AnalysisRecord] = field(default_factory=list)
     reports: list[dict[str, Any]] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def touch(self) -> None:
         self.updated_at = utc_now()
@@ -120,6 +121,7 @@ class ConversationSession:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "version": self.version,
+            "metadata": dict(self.metadata),
             "messages": [item.to_dict() for item in self.messages],
             "analyses": [
                 item.to_dict(include_result=include_analysis_results)
@@ -145,6 +147,7 @@ class ConversationSession:
             created_at=str(data.get("created_at") or utc_now()),
             updated_at=str(data.get("updated_at") or utc_now()),
             version=int(data.get("version") or 0),
+            metadata=dict(data.get("metadata") or {}),
             messages=[
                 ConversationMessage.from_dict(item)
                 for item in data.get("messages") or []

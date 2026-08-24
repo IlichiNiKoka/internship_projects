@@ -1,11 +1,16 @@
 # -*- coding: utf-8 -*-
-"""SparkSession 构建：负责处理 JAVA_HOME 探测等环境兼容问题。
+"""SparkSession 构建：负责处理 JAVA_HOME / HADOOP_HOME 探测等环境兼容问题。
 
 兼容性：
   * Spark 3.5.1 官方兼容 Java 8/11/17（系统默认 Java 21 不兼容）；
   * 本模块在 Windows / Linux / macOS 下都能自动探测 JDK，候选路径见下方
     _JAVA_HOME_CANDIDATES；如需强制指定，设置环境变量 JAVA_HOME，
     或在 .env 中配置 ANALYTICS_SPARK_JAVA_HOME。
+  * Windows 下 Spark 启动前必须解析 HADOOP_HOME 并设置 JVM 属性
+    hadoop.home.dir，否则 Hadoop Shell 在 getWinUtilsPath() 抛异常。
+    Hadoop 3.x 官方二进制移除了 winutils.exe，本模块自动探测已有
+    HADOOP_HOME；如系统已安装 Hadoop 3.x 但缺 winutils，则改用
+    纯 Python 的 pandas 路径（MySQL CSV DataProvider 回退）。
 """
 
 from __future__ import annotations
@@ -45,6 +50,19 @@ _JAVA_HOME_CANDIDATES: list[str] = [
     r"C:\Program Files\Eclipse Adoptium\jdk-11*",
 ]
 
+# 候选 HADOOP_HOME 路径（Windows 专用；Linux/macOS 一般通过环境变量设置）
+_HADOOP_HOME_CANDIDATES_WIN: list[str] = [
+    r"C:\Program Files\hadoop-3.5.0",
+    r"C:\Program Files\hadoop-3.4.1",
+    r"C:\Program Files\hadoop-3.4.0",
+    r"C:\Program Files\hadoop-3.3.6",
+    r"C:\Program Files\hadoop-3.3.5",
+    r"C:\Program Files\hadoop",
+    r"C:\Program Files\Hadoop",
+    r"C:\hadoop",
+    r"C:\winutils",
+]
+
 
 def _resolve_java_home(settings: Settings) -> str:
     """按优先级解析 JAVA_HOME：配置项 -> 环境变量 -> 候选路径探测。"""
@@ -67,6 +85,66 @@ def _resolve_java_home(settings: Settings) -> str:
         "未找到兼容的 JAVA_HOME（Spark 3.5 需要 Java 8/11/17）。"
         "请设置环境变量 JAVA_HOME，或在 .env 中配置 ANALYTICS_SPARK_JAVA_HOME。"
     )
+
+
+def _resolve_hadoop_home(settings: Settings) -> str | None:
+    """按优先级解析 HADOOP_HOME：设置项 -> 环境变量 -> Windows 候选路径探测。
+
+    Windows 上 Spark 启动 Hadoop Shell 时需要 hadoop.home.dir 指向含
+    bin/winutils.exe 的目录。若返回 None，则应改用 pandas 纯 Python 路径。
+    """
+    hadoop_home = settings.spark_hadoop_home.strip() if getattr(settings, "spark_hadoop_home", "") else ""
+    if hadoop_home and Path(hadoop_home).exists():
+        return hadoop_home
+
+    env_home = os.environ.get("HADOOP_HOME", "") or os.environ.get("hadoop.home.dir", "")
+    if env_home and Path(env_home).exists():
+        return env_home
+
+    if sys.platform == "win32":
+        import glob
+        for candidate in _HADOOP_HOME_CANDIDATES_WIN:
+            for matched in glob.glob(candidate):
+                p = Path(matched)
+                # 合法 HADOOP_HOME: 至少有 bin/ 子目录 + etc/hadoop/
+                if (p / "bin").exists() and (p / "etc" / "hadoop").exists():
+                    return str(p)
+    return None
+
+
+def _get_short_path_if_needed(path: str) -> str:
+    """若 Windows 路径包含空格，返回其 8.3 短路径；否则原样返回。
+
+    原因：spark.driver.extraJavaOptions 按空格切分参数，
+    `-Dhadoop.home.dir=C:/Program Files/hadoop-3.5.0` 会被解析为两段，
+    第二段 `Files/hadoop-3.5.0` 被 JVM 当作类名导致 ClassNotFoundException。
+    """
+    if sys.platform != "win32" or " " not in path:
+        return path
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        _GetShortPathNameW = ctypes.windll.kernel32.GetShortPathNameW
+        _GetShortPathNameW.argtypes = [
+            wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+        _GetShortPathNameW.restype = wintypes.DWORD
+
+        # 第一次调用：返回需要的缓冲区大小
+        length = _GetShortPathNameW(path, None, 0)
+        if length == 0:
+            return path  # 获取失败，返回原路径
+        buf = ctypes.create_unicode_buffer(length)
+        if _GetShortPathNameW(path, buf, length) == 0:
+            return path
+        return buf.value
+    except Exception:
+        # 获取失败时回退到 Windows Scripting Host（部分精简系统没有 ctypes）
+        try:
+            import win32api  # type: ignore
+            return win32api.GetShortPathName(path)
+        except Exception:
+            return path
 
 
 def _pyarrow_available() -> bool:
@@ -115,6 +193,17 @@ def build_spark_session(settings: Settings) -> SparkSession:
     os.environ["PYSPARK_PYTHON"] = sys.executable
     os.environ["PYSPARK_DRIVER_PYTHON"] = sys.executable
 
+    # Windows 必须设置 HADOOP_HOME + hadoop.home.dir，
+    # 否则 Hadoop Shell 在 <clinit> 中因找不到 winutils.exe 直接抛异常。
+    # 这里同时设置 os.environ（JVM 启动时读）和 Spark 配置（JVM 系统属性）。
+    hadoop_home = _resolve_hadoop_home(settings)
+    if sys.platform == "win32" and hadoop_home:
+        os.environ["HADOOP_HOME"] = hadoop_home
+        logger.info("Spark 环境：HADOOP_HOME=%s（已设置 JVM hadoop.home.dir）", hadoop_home)
+    else:
+        logger.info("Spark 环境：HADOOP_HOME=%s（非 Windows 或未探测到，跳过）",
+                    hadoop_home or "<unset>")
+
     logger.info("Spark 环境：JAVA_HOME=%s，PYSPARK_PYTHON=%s，master=%s",
                 java_home, sys.executable, settings.spark_master)
 
@@ -130,7 +219,7 @@ def build_spark_session(settings: Settings) -> SparkSession:
     elif sys.platform == "win32":
         logger.warning("未找到 winutils.exe（HADOOP_HOME），Spark 在 Windows 上可能无法创建本地临时目录")
 
-    spark = (
+    builder = (
         SparkSession.builder
         .appName(settings.app_name)
         .master(settings.spark_master)
@@ -151,7 +240,23 @@ def build_spark_session(settings: Settings) -> SparkSession:
         .config("spark.sql.session.timeZone", "UTC")
         # 本地模式关闭 UI 端口冲突告警，允许多进程测试
         .config("spark.ui.enabled", "true" if settings.env != "testing" else "false")
-        .getOrCreate()
     )
+    # 关键：必须在 SparkContext 初始化前把 hadoop.home.dir 注入 JVM 系统属性，
+    # 否则 Hadoop Shell 仍会用默认 HADOOP_HOME 检查导致 HADOOP_HOME unset。
+    # 注意：
+    #   (1) Windows 路径反斜杠在 JVM 参数中会被吃掉，必须全部替换为正斜杠。
+    #   (2) 路径不能有空格：spark.driver.extraJavaOptions 按空格切分参数，
+    #       "C:/Program Files/..." 会被拆成两段，导致 JVM 把 "Files/..."
+    #       当作类名抛出 ClassNotFoundException。因此使用 Windows 8.3 短路径
+    #       代替，如 C:\PROGRA~1\HADOOP~1.0（Scripting.FileSystemObject 可获取）。
+    #   (3) 不能加引号，引号会被当作路径一部分。
+    if sys.platform == "win32" and hadoop_home:
+        os.environ["HADOOP_HOME_WARN_SUPPRESS"] = "true"
+        hadoop_home_jvm = _get_short_path_if_needed(hadoop_home).replace("\\", "/")
+        builder = builder.config(
+            "spark.driver.extraJavaOptions",
+            f"-Dhadoop.home.dir={hadoop_home_jvm}",
+        )
+    spark = builder.getOrCreate()
     spark.sparkContext.setLogLevel(settings.spark_log_level)
     return spark

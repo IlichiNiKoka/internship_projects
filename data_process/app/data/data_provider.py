@@ -7,17 +7,54 @@
   * SparkDataProvider 惰性加载 + cache()：首次查询触发一次全表扫描，
     后续聚合全部命中内存缓存，大幅降低重复查询延迟；
   * 显式 schema：按清洗后数据字典定义类型，读取速度与稳定性均优于推断。
+
+注意：
+  * Windows 下 Spark / Hadoop Shell 在 JVM 初始化前必须已设置 HADOOP_HOME
+    和 JAVA_HOME，否则 pyspark 模块导入时会启动 Java gateway 导致崩溃。
+  * 本模块在模块顶部通过 app.utils.spark._resolve_* 预设置环境变量，
+    确保在 import pyspark 之前环境已就绪。
 """
 
 from __future__ import annotations
 
 import logging
+import os
+import sys
 import threading
 import time
 from abc import ABC, abstractmethod
 
-from pyspark.sql import DataFrame, SparkSession, functions as F
-from pyspark.sql.types import (
+# ---------------------------------------------------------------------------
+# 【关键】在任何 pyspark 导入之前预先设置 JAVA_HOME / HADOOP_HOME。
+# pyspark.sql 的顶层导入会触发 PySpark 内部的 SparkContext._ensure_initialized
+# 路径，可能创建 Java gateway；此时环境变量必须正确设置，
+# 否则 Windows 平台将出现 HADOOP_HOME unset 或 Java gateway 崩溃。
+# ---------------------------------------------------------------------------
+from app.utils.spark import _resolve_hadoop_home, _resolve_java_home  # noqa: E402
+from config.settings import Settings  # noqa: E402
+
+try:
+    _settings = Settings.load()
+except Exception:  # settings 加载失败（如测试环境）时跳过环境预配置
+    _settings = None
+
+if _settings is not None:
+    try:
+        _java_home = _resolve_java_home(_settings)
+        os.environ["JAVA_HOME"] = _java_home
+    except Exception:
+        pass
+    try:
+        _hadoop_home = _resolve_hadoop_home(_settings)
+        if _hadoop_home:
+            os.environ["HADOOP_HOME"] = _hadoop_home
+            if sys.platform == "win32":
+                os.environ["HADOOP_HOME_WARN_SUPPRESS"] = "true"
+    except Exception:
+        pass
+
+from pyspark.sql import DataFrame, SparkSession, functions as F  # noqa: E402
+from pyspark.sql.types import (  # noqa: E402
     DoubleType,
     IntegerType,
     StringType,
@@ -25,8 +62,7 @@ from pyspark.sql.types import (
     StructType,
 )
 
-from app.core.exceptions import ServiceUnavailableError
-from config.settings import Settings
+from app.core.exceptions import ServiceUnavailableError  # noqa: E402
 
 logger = logging.getLogger(__name__)
 

@@ -25,6 +25,9 @@ PyMySQL>=1.1
 # ---- 大数据计算引擎 ----
 # Spark 3.5.1 官方支持 Python 3.8~3.12，兼容 Java 8/11/17
 pyspark==3.5.1
+# PyArrow：Spark createDataFrame 的 Arrow 加速路径必需；
+# 缺失时会退化为 PythonRDD 路径（Windows 下 worker 不可靠且慢）
+pyarrow>=14.0
 
 # ---- 二期 3.3.4：Redis（正式依赖：结果缓存 + 多轮会话持久化）----
 # redis-py：未安装时服务自动降级为进程内缓存；建议安装以启用 Redis 模式。

@@ -57,6 +57,13 @@ class ResourceNotFoundError(BizException):
         super().__init__(ErrorCode.NOT_FOUND, message)
 
 
+class ConflictError(BizException):
+    """资源版本冲突（409），用于 CAS/乐观锁并发冲突。"""
+
+    def __init__(self, message: str | None = None, detail: object = None):
+        super().__init__(ErrorCode.CONFLICT, message, detail)
+
+
 # ---- 4xx：认证 / 权限 / 限流类（二期 3.3.5）----
 class UnauthorizedError(BizException):
     """未携带认证凭证（401）。"""
@@ -83,15 +90,8 @@ class RateLimitError(BizException):
         super().__init__(ErrorCode.TOO_MANY_REQUESTS, message, detail)
 
 
-class ConflictError(BizException):
-    """资源冲突（409）：并发更新时快照/版本冲突（多轮会话、AI 分析等场景）。"""
-
-    def __init__(self, message: str | None = None, detail: object = None):
-        super().__init__(ErrorCode.CONFLICT, message, detail)
-
-
 class TooManyRequestsError(BizException):
-    """请求过于频繁或并发锁等待超时（429）。"""
+    """请求频率超限（429），用于会话锁竞争等场景。"""
 
     def __init__(self, message: str | None = None, detail: object = None):
         super().__init__(ErrorCode.TOO_MANY_REQUESTS, message, detail)
