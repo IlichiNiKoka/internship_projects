@@ -52,6 +52,14 @@ class Settings:
 
     # ---- 数据源 ----
     data_csv_path: Path = DEFAULT_CLEAN_CSV
+    # 数据提供者类型：csv（本地清洗后 CSV，一期）/ mysql / hdfs（二期数据底座）
+    data_source: str = "csv"
+    # MySQL 数据底座：复用人员2 入库的 db_* 连接参数，走 Spark JDBC 读取入库表
+    mysql_jdbc_driver: str = "com.mysql.cj.jdbc.Driver"   # MySQL Connector/J 驱动类
+    mysql_jdbc_connect_timeout_ms: int = 5000             # JDBC 建连超时（毫秒）
+    # HDFS 数据底座
+    hdfs_namenode: str = ""                 # NameNode 地址，如 hdfs://namenode:8020（留空用默认）
+    hdfs_path: str = ""                     # HDFS 上清洗后数据路径，如 /data/sparcs_clean.csv
 
     # ---- 结构化大数据入库（人员2 · 二期 MySQL / SQLite 兜底）----
     # engine: auto(MySQL 优先，失败降级 SQLite) / mysql / sqlite
@@ -70,6 +78,7 @@ class Settings:
     spark_log_level: str = "WARN"           # Spark 内部日志级别
     spark_driver_memory: str = "2g"
     spark_java_home: str = ""               # 留空自动探测（见 utils/spark.py）
+    spark_hadoop_home: str = ""             # 留空自动探测（Windows 下必填路径含 bin/winutils.exe）
     spark_shuffle_partitions: int = 8       # 本地模式无需过多分区
     spark_adaptive_enabled: bool = True     # Spark SQL AQE 自适应执行（二期任务参数优化）
 
@@ -118,11 +127,9 @@ class Settings:
     llm_model: str = "deepseek-chat"
     llm_timeout: int = 30                  # 单次 LLM 调用超时（秒）
     llm_temperature: float = 0.2           # 低温度减少幻觉
-    llm_max_tokens: int = 800              # 文本生成最大 token
+    llm_max_tokens: int = 4000             # 文本生成最大 token（DeepSeek V4 Flash 需更大 token 防止思考内容被截断）
     # 意图识别：达标阈值（低于此值时分类器输出 unsupported）
     intent_min_confidence: float = 0.45
-    # 文本生成幻觉检查：原文数字与生成文本数字允许的相对误差
-    hallucination_tolerance: float = 0.02
 
     # ---- 日志 ----
     log_dir: Path = LOG_DIR_DEFAULT

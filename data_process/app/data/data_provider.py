@@ -7,16 +7,54 @@
   * SparkDataProvider 惰性加载 + cache()：首次查询触发一次全表扫描，
     后续聚合全部命中内存缓存，大幅降低重复查询延迟；
   * 显式 schema：按清洗后数据字典定义类型，读取速度与稳定性均优于推断。
+
+注意：
+  * Windows 下 Spark / Hadoop Shell 在 JVM 初始化前必须已设置 HADOOP_HOME
+    和 JAVA_HOME，否则 pyspark 模块导入时会启动 Java gateway 导致崩溃。
+  * 本模块在模块顶部通过 app.utils.spark._resolve_* 预设置环境变量，
+    确保在 import pyspark 之前环境已就绪。
 """
 
 from __future__ import annotations
 
 import logging
+import os
+import sys
+import threading
 import time
 from abc import ABC, abstractmethod
 
-from pyspark.sql import DataFrame, SparkSession, functions as F
-from pyspark.sql.types import (
+# ---------------------------------------------------------------------------
+# 【关键】在任何 pyspark 导入之前预先设置 JAVA_HOME / HADOOP_HOME。
+# pyspark.sql 的顶层导入会触发 PySpark 内部的 SparkContext._ensure_initialized
+# 路径，可能创建 Java gateway；此时环境变量必须正确设置，
+# 否则 Windows 平台将出现 HADOOP_HOME unset 或 Java gateway 崩溃。
+# ---------------------------------------------------------------------------
+from app.utils.spark import _resolve_hadoop_home, _resolve_java_home  # noqa: E402
+from config.settings import Settings  # noqa: E402
+
+try:
+    _settings = Settings.load()
+except Exception:  # settings 加载失败（如测试环境）时跳过环境预配置
+    _settings = None
+
+if _settings is not None:
+    try:
+        _java_home = _resolve_java_home(_settings)
+        os.environ["JAVA_HOME"] = _java_home
+    except Exception:
+        pass
+    try:
+        _hadoop_home = _resolve_hadoop_home(_settings)
+        if _hadoop_home:
+            os.environ["HADOOP_HOME"] = _hadoop_home
+            if sys.platform == "win32":
+                os.environ["HADOOP_HOME_WARN_SUPPRESS"] = "true"
+    except Exception:
+        pass
+
+from pyspark.sql import DataFrame, SparkSession, functions as F  # noqa: E402
+from pyspark.sql.types import (  # noqa: E402
     DoubleType,
     IntegerType,
     StringType,
@@ -24,8 +62,7 @@ from pyspark.sql.types import (
     StructType,
 )
 
-from app.core.exceptions import ServiceUnavailableError
-from config.settings import Settings
+from app.core.exceptions import ServiceUnavailableError  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +90,34 @@ SPARCS_SCHEMA = StructType(
 )
 
 
+def _cast_to_schema(df: DataFrame) -> DataFrame:
+    """按 SPARCS_SCHEMA 逐列 cast 类型并重排为标准字段顺序。
+
+    CSV / MySQL / HDFS 三种数据源读取后的列顺序或类型可能不一致，
+    统一在这里对齐：按 schema 字段名 cast（脏值容错为 null），
+    再 select 出标准顺序的 33 个字段。
+    """
+    for field in SPARCS_SCHEMA.fields:
+        df = df.withColumn(field.name, F.col(field.name).cast(field.dataType))
+    return df.select(*[f.name for f in SPARCS_SCHEMA.fields])
+
+
+def _read_csv_and_cast(spark: SparkSession, path: str) -> DataFrame:
+    """按“列名”读取 CSV（首行表头）并对齐到标准 schema。
+
+    清洗文件列顺序可能与 SPARCS_SCHEMA 不同（例如 length_of_stay 可能在
+    前面或后面），因此先整表按字符串读入，再按 schema 列名逐列 cast。
+    Spark 本地 CSV 与 HDFS CSV 复用同一逻辑。
+    """
+    df = (
+        spark.read
+        .option("header", "true")
+        .option("inferSchema", "false")
+        .csv(path)
+    )
+    return _cast_to_schema(df)
+
+
 class DataProvider(ABC):
     """数据提供者统一接口。"""
 
@@ -73,10 +138,15 @@ class SparkDataProvider(DataProvider):
         self._df: DataFrame | None = None
         self._row_count: int | None = None
         self._load_seconds: float | None = None
+        self._lock = threading.Lock()
 
     def dataframe(self) -> DataFrame:
+        # 双重检查锁：前端大屏首次打开会并发多个聚合请求，若不互斥，
+        # 会同时触发全量加载（200 万行），Spark local 模式下互相抢资源卡死。
         if self._df is None:
-            self._load()
+            with self._lock:
+                if self._df is None:
+                    self._load()
         return self._df
 
     def _load(self) -> None:
@@ -90,18 +160,7 @@ class SparkDataProvider(DataProvider):
         logger.info("开始加载数据: %s (master=%s)", csv_path, self._settings.spark_master)
         try:
             spark = _get_or_create_spark(self._settings)
-            # 按“列名”而非“列位置”读取：清洗文件列顺序可能与 SPARCS_SCHEMA 不同
-            # （例如 length_of_stay 可能在前面或后面）。先整表按字符串读入，
-            # 再按 schema 列名逐列 cast 为正确类型，最后重排为标准字段顺序。
-            df = (
-                spark.read
-                .option("header", "true")
-                .option("inferSchema", "false")
-                .csv(csv_path.as_posix())
-            )
-            for field in SPARCS_SCHEMA.fields:
-                df = df.withColumn(field.name, F.col(field.name).cast(field.dataType))
-            df = df.select(*[f.name for f in SPARCS_SCHEMA.fields])
+            df = _read_csv_and_cast(spark, csv_path.as_posix())
             df = df.cache()                    # 缓存全表，后续聚合复用
             self._row_count = df.count()       # 触发加载并物化缓存
             self._df = df
@@ -119,6 +178,170 @@ class SparkDataProvider(DataProvider):
     def status(self) -> dict:
         return {
             "data_source": str(self._settings.data_csv_path),
+            "spark_master": self._settings.spark_master,
+            "loaded": self._df is not None,
+            "row_count": self._row_count,
+            "load_seconds": self._load_seconds,
+        }
+
+
+class MySQLDataProvider(DataProvider):
+    """从 MySQL 读取已入库数据（人员2 storage.loader 产物 · 二期数据底座）。
+
+    通过 Spark JDBC 读取 `db_table` 表，只保留 33 个业务字段（跳过 id / row_hash
+    两个系统列），按 SPARCS_SCHEMA 统一列名与类型后缓存全表，供聚合/算法层使用。
+    连接失败统一转 ServiceUnavailableError（503），由中间件标准化响应。
+    """
+
+    def __init__(self, settings: Settings):
+        self._settings = settings
+        self._df: DataFrame | None = None
+        self._row_count: int | None = None
+        self._load_seconds: float | None = None
+        self._lock = threading.Lock()
+
+    def dataframe(self) -> DataFrame:
+        # 双重检查锁：防止前端大屏并发请求同时触发 MySQL 全表加载（200 万行）
+        if self._df is None:
+            with self._lock:
+                if self._df is None:
+                    self._load()
+        return self._df
+
+    def _jdbc_url(self) -> str:
+        s = self._settings
+        return f"jdbc:mysql://{s.db_host}:{s.db_port}/{s.db_name}"
+
+    def _load(self) -> None:
+        start = time.perf_counter()
+        url = self._jdbc_url()
+        logger.info("开始从 MySQL 加载数据: %s (table=%s)",
+                    url, self._settings.db_table)
+        try:
+            spark = _get_or_create_spark(self._settings)
+            s = self._settings
+            # 分区读取：先查询自增主键 id 上界，按 id 分片并行加载，
+            # 避免单分区全表扫描 200 万行导致耗时超过接口超时（本地实测约 234s > 120s）
+            max_id = None
+            try:
+                max_id = (
+                    spark.read.format("jdbc")
+                    .option("url", url)
+                    .option("dbtable", f"(SELECT MAX(id) AS m FROM {s.db_table}) t")
+                    .option("user", s.db_user)
+                    .option("password", s.db_password)
+                    .option("driver", s.mysql_jdbc_driver)
+                    .option("connectTimeout", str(s.mysql_jdbc_connect_timeout_ms))
+                    .load()
+                    .collect()[0][0]
+                )
+            except Exception:  # 老表无 id 主键时忽略，退回单分区加载
+                logger.warning("MySQL 分区读取不可用（无 id 主键？），退回单分区加载")
+            reader = (
+                spark.read.format("jdbc")
+                .option("url", url)
+                .option("dbtable", self._settings.db_table)
+                .option("user", self._settings.db_user)
+                .option("password", self._settings.db_password)
+                .option("driver", self._settings.mysql_jdbc_driver)
+                .option("connectTimeout", str(self._settings.mysql_jdbc_connect_timeout_ms))
+            )
+            if max_id is not None:
+                reader = (
+                    reader
+                    .option("partitionColumn", "id")
+                    .option("lowerBound", "1")
+                    .option("upperBound", str(int(max_id) + 1))
+                    .option("numPartitions", "8")
+                )
+            df = reader.load()
+            # 入库表含 id / row_hash 系统列，此处只取 33 个业务字段并对齐标准 schema
+            df = _cast_to_schema(df)
+            df = df.cache()
+            self._row_count = df.count()       # 触发 JDBC 读取并物化缓存
+            self._df = df
+            self._load_seconds = round(time.perf_counter() - start, 2)
+            logger.info("MySQL 数据加载完成: %d 行，耗时 %.2fs",
+                        self._row_count, self._load_seconds)
+        except ServiceUnavailableError:
+            raise
+        except Exception as exc:  # JDBC 驱动缺失 / 连接失败 / SQL 异常统一转 503
+            logger.exception("MySQL 数据加载失败")
+            raise ServiceUnavailableError(
+                message=f"MySQL 数据加载失败: {exc}",
+                detail={"jdbc_url": url, "table": self._settings.db_table},
+            ) from exc
+
+    def status(self) -> dict:
+        s = self._settings
+        return {
+            "data_source": (
+                f"mysql://{s.db_host}:{s.db_port}/{s.db_name}/{s.db_table}"
+            ),
+            "spark_master": s.spark_master,
+            "loaded": self._df is not None,
+            "row_count": self._row_count,
+            "load_seconds": self._load_seconds,
+        }
+
+
+class HDFSDataProvider(DataProvider):
+    """从 HDFS 读取清洗后 CSV（或 Parquet）数据（二期数据底座）。
+
+    HDFS 地址由 `hdfs_namenode` + `hdfs_path` 拼装，Spark 原生支持 hdfs:// 协议，
+    无需额外客户端；读取后同样对齐 SPARCS_SCHEMA 并缓存全表。
+    """
+
+    def __init__(self, settings: Settings):
+        self._settings = settings
+        self._df: DataFrame | None = None
+        self._row_count: int | None = None
+        self._load_seconds: float | None = None
+        self._lock = threading.Lock()
+
+    def dataframe(self) -> DataFrame:
+        # 双重检查锁：防止前端大屏并发请求同时触发 HDFS 全量加载
+        if self._df is None:
+            with self._lock:
+                if self._df is None:
+                    self._load()
+        return self._df
+
+    def _hdfs_url(self) -> str:
+        s = self._settings
+        namenode = s.hdfs_namenode or "hdfs://localhost:8020"
+        path = s.hdfs_path or "/data/sparcs_clean.csv"
+        return f"{namenode.rstrip('/')}/{path.lstrip('/')}"
+
+    def _load(self) -> None:
+        start = time.perf_counter()
+        url = self._hdfs_url()
+        logger.info("开始从 HDFS 加载数据: %s", url)
+        try:
+            spark = _get_or_create_spark(self._settings)
+            if url.endswith(".parquet"):
+                df = spark.read.parquet(url)
+                df = _cast_to_schema(df)
+            else:
+                df = _read_csv_and_cast(spark, url)
+            df = df.cache()
+            self._row_count = df.count()       # 触发 HDFS 读取并物化缓存
+            self._df = df
+            self._load_seconds = round(time.perf_counter() - start, 2)
+            logger.info("HDFS 数据加载完成: %d 行，耗时 %.2fs",
+                        self._row_count, self._load_seconds)
+        except ServiceUnavailableError:
+            raise
+        except Exception as exc:  # NameNode 不可达 / 文件不存在统一转 503
+            logger.exception("HDFS 数据加载失败")
+            raise ServiceUnavailableError(
+                message=f"HDFS 数据加载失败: {exc}",
+                detail={"hdfs_url": url},
+            ) from exc
+
+    def status(self) -> dict:
+        return {
+            "data_source": self._hdfs_url(),
             "spark_master": self._settings.spark_master,
             "loaded": self._df is not None,
             "row_count": self._row_count,
@@ -150,3 +373,26 @@ def _get_or_create_spark(settings: Settings) -> SparkSession:
     """延迟导入以支持测试环境（app/utils/spark.py 负责 JAVA_HOME 探测）。"""
     from app.utils.spark import build_spark_session
     return build_spark_session(settings)
+
+
+def build_data_provider(settings: Settings) -> DataProvider:
+    """按 `data_source` 配置构建数据提供者（二期：csv / mysql / hdfs 数据底座）。
+
+    * csv    -> SparkDataProvider（本地清洗后 CSV，一期默认）
+    * mysql  -> MySQLDataProvider（读取人员2 入库的 MySQL 表）
+    * hdfs   -> HDFSDataProvider（读取 HDFS 上的清洗后数据）
+
+    业务代码（服务层 / 算法层）只依赖 DataProvider.dataframe()，
+    换数据源无需改动，只需在 .env 切换 ANALYTICS_DATA_SOURCE。
+    """
+    source = (getattr(settings, "data_source", "csv") or "csv").strip().lower()
+    if source == "csv":
+        return SparkDataProvider(settings)
+    if source == "mysql":
+        return MySQLDataProvider(settings)
+    if source == "hdfs":
+        return HDFSDataProvider(settings)
+    raise ServiceUnavailableError(
+        message=f"不支持的数据源配置: {source}（可选 csv / mysql / hdfs）",
+        detail={"data_source": source},
+    )

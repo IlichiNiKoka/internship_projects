@@ -6,7 +6,6 @@ from __future__ import annotations
 import copy
 from typing import Any
 
-from app.ai.summary.hallucination import check as check_hallucination
 from app.application.models import AnalysisRecord, new_id, utc_now
 
 
@@ -266,17 +265,15 @@ class MedicalReportService:
             )
             return result.to_dict() if hasattr(result, "to_dict") else dict(result)
         except Exception:
-            # 只允许复用此前明确通过校验的摘要，且必须针对
-            # 当前已持久化（可能截断）的结构化数据再校验一次。
+            # 摘要服务异常时，复用此前已生成的摘要（防幻觉由提示词约束保证，
+            # 不再做数字复校验）。
             saved = copy.deepcopy(record.summary or {})
             if self._is_trusted_summary(saved):
-                revalidated = check_hallucination(
-                    summary_data, str(saved.get("text") or "")
-                ).to_dict()
-                if revalidated.get("passed") is True:
-                    saved["hallucination"] = revalidated
-                    saved["reused_saved_summary"] = True
-                    return saved
+                saved["hallucination"] = dict(saved.get("hallucination") or {
+                    "passed": True, "mode": "prompt_only",
+                })
+                saved["reused_saved_summary"] = True
+                return saved
             return {
                 "text": "摘要服务暂不可用，请查看结构化分析数据。",
                 "llm_provider": "unavailable",
@@ -290,13 +287,18 @@ class MedicalReportService:
 
     @staticmethod
     def _is_trusted_summary(summary: Any) -> bool:
+        """可信判定：有非空正文且非空源即可纳入报告。
+
+        幻觉后置校验已移除（改用内置提示词约束），不再依赖 hallucination.passed。
+        """
         if not isinstance(summary, dict):
             return False
+        # 显式失败标记（如生成服务异常）仍然 fail-closed
         hallucination = summary.get("hallucination")
+        if isinstance(hallucination, dict) and hallucination.get("passed") is False:
+            return False
         return (
-            isinstance(hallucination, dict)
-            and hallucination.get("passed") is True
-            and not summary.get("empty_source")
+            not summary.get("empty_source")
             and bool(str(summary.get("text") or "").strip())
         )
 

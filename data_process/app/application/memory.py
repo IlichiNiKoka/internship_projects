@@ -1,5 +1,12 @@
 # -*- coding: utf-8 -*-
-"""多轮对话存储：进程内实现、Redis 实现与 LangChain 兼容适配器。"""
+"""多轮对话存储：进程内实现、Redis 实现与 LangChain 兼容适配器。
+
+Phase 2 增强（已实现）：
+  1. 长期记忆压缩：LLM 将超出上限的旧对话压缩为结构化摘要，保留核心语义；
+  2. 上下文检索：LLM 根据当前查询从历史中筛选相关轮次，而非仅靠最近 N 轮；
+  本地职责：消息格式化、prompt 编排、摘要存储与注入；LLM 职责：压缩与相关性判断。
+  待办（需额外基础设施）：向量数据库存储、知识图谱、跨会话迁移。
+"""
 
 from __future__ import annotations
 
@@ -521,10 +528,16 @@ class LangChainSessionMemory:
     def load_memory_variables(self, inputs: dict | None = None) -> dict[str, Any]:
         session = self._store.load(self.session_id)
         messages = session.messages if session else []
+        # 注入压缩摘要（如有）作为系统级上下文前缀
+        compressed = ""
+        if session and isinstance(session.metadata, dict):
+            compressed = session.metadata.get("compressed_summary") or ""
         try:
             from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
             converted = []
+            if compressed:
+                converted.append(SystemMessage(content=f"[历史摘要] {compressed}"))
             for message in messages:
                 if message.role == "user":
                     converted.append(HumanMessage(content=message.content))
@@ -534,12 +547,14 @@ class LangChainSessionMemory:
                     converted.append(SystemMessage(content=message.content))
             return {self.memory_key: converted}
         except ImportError:
-            return {
-                self.memory_key: [
-                    {"role": item.role, "content": item.content}
-                    for item in messages
-                ]
-            }
+            result = []
+            if compressed:
+                result.append({"role": "system", "content": f"[历史摘要] {compressed}"})
+            result.extend(
+                {"role": item.role, "content": item.content}
+                for item in messages
+            )
+            return {self.memory_key: result}
 
     def save_context(self, inputs: dict[str, Any], outputs: dict[str, Any]) -> None:
         with self.session_lock():
@@ -557,6 +572,113 @@ class LangChainSessionMemory:
             session.messages = session.messages[-self._max_messages:]
             session.touch()
             self.save_session(session)
+
+    # ------------------------------------------------------------------
+    # Phase 2: LLM 长期记忆压缩与上下文检索
+    # ------------------------------------------------------------------
+    _COMPRESS_SYSTEM = (
+        "你是一个对话记忆压缩器。把多轮医疗分析对话压缩为结构化摘要，"
+        "保留：1) 用户查询过的维度/指标/意图；2) 关键数字结论；"
+        "3) 用户偏好（常查的维度、关心的指标）。丢弃寒暄与重复。"
+        "输出纯文本，不超过 300 字。"
+    )
+    _RELEVANCE_SYSTEM = (
+        "你是一个对话相关性判断器。给定当前查询和历史对话，"
+        "返回与当前查询相关的历史轮次编号（从1开始），用 JSON 数组表示，如 [1,3]。"
+        "只返回 JSON，不要解释。"
+    )
+
+    def compress_history(self, llm_client) -> str:
+        """用 LLM 压缩当前会话全部消息为摘要，存入 session.metadata。
+
+        本地职责：格式化消息、构造 prompt、存储摘要。
+        LLM 职责：语义压缩。
+        """
+        from app.ai.summary.llm_client import MockClient
+
+        with self.session_lock():
+            session = self.load_session()
+            if session is None or not session.messages:
+                return ""
+            if llm_client is None or isinstance(llm_client, MockClient):
+                # 无 LLM 时做本地兜底：取最近几轮的文本拼接
+                recent = session.messages[-6:]
+                summary = " | ".join(
+                    f"{m.role}:{m.content[:60]}" for m in recent
+                )
+            else:
+                transcript = "\n".join(
+                    f"{i+1}. {m.role}: {m.content}"
+                    for i, m in enumerate(session.messages)
+                )
+                try:
+                    summary = llm_client.chat(self._COMPRESS_SYSTEM, transcript)
+                except Exception as exc:
+                    logger.warning("LLM 记忆压缩失败: %s", exc)
+                    summary = ""
+                if not summary or summary.startswith("__MOCK__"):
+                    recent = session.messages[-6:]
+                    summary = " | ".join(
+                        f"{m.role}:{m.content[:60]}" for m in recent
+                    )
+            # 存入 session metadata
+            if session.metadata is None:
+                session.metadata = {}
+            session.metadata["compressed_summary"] = summary
+            session.touch()
+            self.save_session(session)
+            return summary
+
+    def retrieve_relevant_context(
+        self, query: str, llm_client
+    ) -> list[dict[str, str]]:
+        """用 LLM 从历史中筛选与当前查询相关的轮次。
+
+        本地职责：格式化历史、构造 prompt、解析 JSON、过滤消息。
+        LLM 职责：相关性判断。
+        """
+        from app.ai.summary.llm_client import MockClient
+
+        with self.session_lock():
+            session = self.load_session()
+            if session is None or not session.messages:
+                return []
+            messages = session.messages
+            # 无 LLM 时：返回最近 4 轮
+            if llm_client is None or isinstance(llm_client, MockClient):
+                return [
+                    {"role": m.role, "content": m.content}
+                    for m in messages[-4:]
+                ]
+            # 构造历史清单
+            lines = []
+            for i, m in enumerate(messages):
+                lines.append(f"{i+1}. {m.role}: {m.content[:120]}")
+            history_text = "\n".join(lines)
+            user_prompt = f"当前查询：{query}\n\n历史对话：\n{history_text}\n\n请返回相关轮次编号 JSON。"
+            try:
+                raw = llm_client.chat(self._RELEVANCE_SYSTEM, user_prompt)
+            except Exception as exc:
+                logger.warning("LLM 上下文检索失败: %s", exc)
+                return [{"role": m.role, "content": m.content} for m in messages[-4:]]
+            if not raw or raw.startswith("__MOCK__"):
+                return [{"role": m.role, "content": m.content} for m in messages[-4:]]
+            # 解析 JSON 数组
+            import json as _json
+            import re as _re
+            m = _re.search(r"\[[\s\S]*\]", raw)
+            if not m:
+                return [{"role": msg.role, "content": msg.content} for msg in messages[-4:]]
+            try:
+                indices = _json.loads(m.group(0))
+            except _json.JSONDecodeError:
+                return [{"role": msg.role, "content": msg.content} for msg in messages[-4:]]
+            relevant = []
+            for idx in indices:
+                if isinstance(idx, int) and 1 <= idx <= len(messages):
+                    msg = messages[idx - 1]
+                    relevant.append({"role": msg.role, "content": msg.content})
+            return relevant or [{"role": m.role, "content": m.content} for m in messages[-4:]]
 
     def clear(self) -> None:
         self.delete_session(acquire_lock=True)

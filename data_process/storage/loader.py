@@ -74,6 +74,27 @@ class DatabaseLoader:
         self._sqlite_path = sqlite_path
 
     # ------------------------------------------------------------------
+    @classmethod
+    def from_settings(cls, csv_path: Path, settings, *, engine: str | None = None) -> "DatabaseLoader":
+        """从集中配置构造实例（config.settings.Settings 的 db_* 字段）。
+
+        让 db_engine / db_host / db_user / db_batch_size 等由 .env 或环境变量
+        （ANALYTICS_DB_*）统一控制，业务入口不再写死连接信息。
+        """
+        return cls(
+            csv_path,
+            engine=engine or getattr(settings, "db_engine", "auto"),
+            batch_size=getattr(settings, "db_batch_size", DEFAULT_BATCH_SIZE),
+            table=getattr(settings, "db_table", "sparcs_discharge_2021"),
+            mysql_host=getattr(settings, "db_host", "127.0.0.1"),
+            mysql_port=getattr(settings, "db_port", 3306),
+            mysql_user=getattr(settings, "db_user", "root"),
+            mysql_password=getattr(settings, "db_password", ""),
+            mysql_database=getattr(settings, "db_name", "medical_analytics"),
+            sqlite_path=getattr(settings, "db_sqlite_path", None),
+        )
+
+    # ------------------------------------------------------------------
     def load(self) -> dict:
         """执行入库并返回报告 dict。"""
         if not self._csv_path.exists():
@@ -151,6 +172,12 @@ class DatabaseLoader:
             },
             "indexes": list(INDEX_COLUMNS),
             "unique_key": ROW_HASH_COLUMN,
+            # UC7 增量更新：本次入库的新增行 vs 被唯一键跳过的重复行
+            "incremental": {
+                "mode": "row_hash_dedup",
+                "new_rows_inserted": inserted_rows,
+                "duplicate_rows_skipped": skipped_rows,
+            },
         }
         logger.info(
             "入库完成: %s -> %s（读取 %d 行，插入 %d 行，跳过重复 %d 行，耗时 %.2fs）",

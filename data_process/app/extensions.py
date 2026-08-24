@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # 仅类型标注用，避免循环导入
+    from app.application.service import MedicalAssistantService
     from app.core.cache import CacheBackend
     from app.core.monitor import PerformanceMonitor
     from app.core.ratelimiter import SlidingWindowLimiter
@@ -23,6 +24,7 @@ class _Extensions:
     cache: "CacheBackend | None" = None
     monitor: "PerformanceMonitor | None" = None          # 二期：接口耗时/慢查询/错误监控
     rate_limiter: "SlidingWindowLimiter | None" = None   # 二期：滑动窗口限流
+    application_service: "MedicalAssistantService | None" = None   # 二期：AI 交互助手服务
 
 
 ext = _Extensions()

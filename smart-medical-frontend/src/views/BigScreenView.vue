@@ -57,7 +57,15 @@ onUnmounted(() => {
 
 const diseaseOptions = computed(() => ['全部疾病', ...(dashboard.value?.topDiagnoses.slice(0, 8).map((d) => d.name) ?? [])])
 const ageOptions = computed(() => ['全部年龄', ...(dashboard.value?.ageDistribution.map((d) => d.name) ?? [])])
-const hospitalOptions = computed(() => ['全部医院', ...(dashboard.value?.topFacilities.slice(0, 8).map((d) => d.name) ?? [])])
+
+// 医院全名可能很长（最长约 62 字符），下拉显示截断名称、保留全名作为筛选值，避免下拉框被撑得过宽
+function shortenName(name: string, max = 22) {
+  return name.length > max ? `${name.slice(0, max)}…` : name
+}
+const hospitalOptions = computed(() => [
+  { label: '全部医院', value: '全部医院' },
+  ...(dashboard.value?.topFacilities.slice(0, 8).map((d) => ({ label: shortenName(d.name), value: d.name })) ?? []),
+])
 
 const chartToolbox = {
   feature: {
@@ -140,7 +148,7 @@ const kpiOption = computed<EChartsOption>(() => ({
           borderColor: 'rgba(96, 165, 250, 0.55)',
           borderWidth: 2,
         },
-        data: [{ xAxis: 0.3, yAxis: 0.5 }],
+        data: [{ xAxis: 0.3, yAxis: 0.5, name: `avg-los-${(kpiLos.value ?? 0).toFixed(2)}` }],
       },
       markPoint2: undefined,
     } as any,
@@ -293,7 +301,7 @@ const severityOption = computed<EChartsOption>(() => ({
       <label class="screen-field">
         <span>医院</span>
         <select v-model="filters.hospital">
-          <option v-for="item in hospitalOptions" :key="item" :value="item">{{ item }}</option>
+          <option v-for="item in hospitalOptions" :key="item.value" :value="item.value" :title="item.value">{{ item.label }}</option>
         </select>
       </label>
       <label class="screen-field">
