@@ -11,6 +11,7 @@
  */
 
 import type { ChatMessage } from '../types/dashboard'
+import { ErrorCode, defaultMessage, isAuthError, isRetryableError } from './errorCodes'
 
 /** 会话 ID 存储键（同一浏览器内恢复历史会话） */
 export const SESSION_STORAGE_KEY = 'assistant_session_id'
@@ -41,7 +42,7 @@ export interface AssistantReply {
 }
 
 interface ApiEnvelope<T> {
-  code: number
+  code: ErrorCode
   message: string
   data: T | null
   query_time: number
@@ -92,16 +93,36 @@ interface ChatResultContract {
 const ASSISTANT_BASE = '/api/v1/assistant'
 
 export class AssistantApiError extends Error {
+  public readonly code: ErrorCode
   public readonly status: number
   public readonly traceId: string
   public readonly detail: unknown
+  public readonly retryAfter?: number
 
-  constructor(status: number, traceId: string, detail: unknown, message: string) {
+  constructor(code: ErrorCode, status: number, traceId: string, detail: unknown, message: string, retryAfter?: number) {
     super(message)
     this.name = 'AssistantApiError'
+    this.code = code
     this.status = status
     this.traceId = traceId
     this.detail = detail
+    this.retryAfter = retryAfter
+  }
+
+  /** 是否为认证错误 (401/403) */
+  isAuthError(): boolean {
+    return isAuthError(this.code)
+  }
+
+  /** 是否为可重试错误 (429/503/504) */
+  isRetryable(): boolean {
+    return isRetryableError(this.code)
+  }
+
+  /** 获取用户友好的错误消息 */
+  getUserMessage(): string {
+    if (this.message) return this.message
+    return defaultMessage(this.code)
   }
 }
 
@@ -113,12 +134,24 @@ async function assistantRequest<T>(path: string, init: RequestInit = {}): Promis
   }
   const response = await fetch(`${ASSISTANT_BASE}${path}`, { ...init, headers })
   const body = (await response.json()) as ApiEnvelope<T>
-  if (!response.ok || body.code !== 200 || body.data === null) {
+
+  // 后端标准响应：code/message/data/query_time/trace_id
+  // 成功：code === 200 且 data !== null
+  // 失败：code !== 200 或 data === null
+  const code = body.code ?? (response.ok ? ErrorCode.OK : ErrorCode.INTERNAL_ERROR)
+
+  if (!response.ok || code !== ErrorCode.OK || body.data === null) {
+    // 尝试从 Retry-After 头获取重试等待时间（429 错误）
+    const retryAfterHeader = response.headers.get('Retry-After')
+    const retryAfter = retryAfterHeader ? parseInt(retryAfterHeader, 10) : undefined
+
     throw new AssistantApiError(
+      code,
       response.status,
       body.trace_id ?? response.headers.get('X-Request-ID') ?? 'unknown',
       body.data,
-      body.message || '请求失败',
+      body.message ?? defaultMessage(code),
+      retryAfter,
     )
   }
   return body.data
