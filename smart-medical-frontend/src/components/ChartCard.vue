@@ -20,6 +20,7 @@ const props = withDefaults(
 
 const rootRef = ref<HTMLDivElement | null>(null)
 let chartInstance: echarts.ECharts | null = null
+let resizeObserver: ResizeObserver | null = null
 
 function renderChart() {
   if (!rootRef.value) {
@@ -60,10 +61,19 @@ watch(
 onMounted(() => {
   renderChart()
   window.addEventListener('resize', handleResize)
+  // 容器尺寸变化（如弹性布局拉伸）时自动 resize 图表
+  if (rootRef.value && typeof ResizeObserver !== 'undefined') {
+    resizeObserver = new ResizeObserver(() => {
+      chartInstance?.resize()
+    })
+    resizeObserver.observe(rootRef.value)
+  }
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', handleResize)
+  resizeObserver?.disconnect()
+  resizeObserver = null
   chartInstance?.dispose()
   chartInstance = null
 })
@@ -75,6 +85,9 @@ onBeforeUnmount(() => {
       <div>
         <h3>{{ title }}</h3>
         <p v-if="subtitle">{{ subtitle }}</p>
+      </div>
+      <div class="panel-header-extra">
+        <slot name="extra" />
       </div>
     </header>
     <div ref="rootRef" class="chart-root" :style="{ height }"></div>

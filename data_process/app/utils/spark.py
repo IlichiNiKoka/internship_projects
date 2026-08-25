@@ -153,6 +153,30 @@ def _pyarrow_available() -> bool:
     return importlib.util.find_spec("pyarrow") is not None
 
 
+# Windows 下 Spark 创建本地临时目录依赖 winutils.exe（hadoop.dll），
+# 若 HADOOP_HOME 未设置会报 "HADOOP_HOME and hadoop.home.dir are unset"
+_HADOOP_HOME_CANDIDATES: list[str] = [
+    r"D:\Project_env\hadoop-bin",
+    r"C:\hadoop",
+    r"D:\hadoop",
+]
+
+
+def _ensure_hadoop_home() -> str | None:
+    """Windows 下确保 HADOOP_HOME 指向含 bin\\winutils.exe 的目录；非 Windows 返回 None。"""
+    if sys.platform != "win32":
+        return None
+
+    env_home = os.environ.get("HADOOP_HOME", "").strip()
+    if env_home and Path(env_home, "bin", "winutils.exe").exists():
+        return env_home
+
+    for candidate in _HADOOP_HOME_CANDIDATES:
+        if Path(candidate, "bin", "winutils.exe").exists():
+            return candidate
+    return None
+
+
 def build_spark_session(settings: Settings) -> SparkSession:
     """构建（或复用）SparkSession，统一环境变量与常用参数。
 
@@ -182,6 +206,18 @@ def build_spark_session(settings: Settings) -> SparkSession:
 
     logger.info("Spark 环境：JAVA_HOME=%s，PYSPARK_PYTHON=%s，master=%s",
                 java_home, sys.executable, settings.spark_master)
+
+    # Windows 下注入 HADOOP_HOME（winutils.exe），避免 SparkContext 初始化失败
+    hadoop_home = _ensure_hadoop_home()
+    if hadoop_home:
+        os.environ["HADOOP_HOME"] = hadoop_home
+        os.environ["hadoop.home.dir"] = hadoop_home
+        bin_dir = str(Path(hadoop_home, "bin"))
+        if bin_dir not in os.environ.get("PATH", ""):
+            os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
+        logger.info("Spark 环境：HADOOP_HOME=%s", hadoop_home)
+    elif sys.platform == "win32":
+        logger.warning("未找到 winutils.exe（HADOOP_HOME），Spark 在 Windows 上可能无法创建本地临时目录")
 
     builder = (
         SparkSession.builder

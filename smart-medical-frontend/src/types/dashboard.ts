@@ -3,6 +3,13 @@ export interface NameValue {
   value: number
 }
 
+/** 年龄 × 性别 交叉统计（来自后端实时聚合，用于总览页性别切换柱状图） */
+export interface AgeGenderStat {
+  age: string
+  gender: string
+  value: number
+}
+
 export interface DiagnosisStat {
   name: string
   dischargeCount: number
@@ -15,6 +22,9 @@ export interface RegionStat {
   dischargeCount: number
   avgCharges: number
   avgCosts: number
+  /** 所在县 / 邮编前缀（静态汇总可选提供，用于离线模式地图点位定位） */
+  county?: string
+  zip3?: string
 }
 
 export interface AdmissionCostStat extends RegionStat {
@@ -50,6 +60,11 @@ export interface DashboardPayload {
     topCounty: string
     topDiagnosis: string
   }
+  /** 筛选下拉全量选项（按名称排序；离线模式也提供全部疾病/医院） */
+  filterOptions?: {
+    diseases: string[]
+    hospitals: string[]
+  }
   dashboard: {
     ageDistribution: NameValue[]
     genderDistribution: NameValue[]
@@ -60,6 +75,8 @@ export interface DashboardPayload {
     medicalSurgicalDistribution: NameValue[]
     severityDistribution: NameValue[]
     mortalityDistribution: NameValue[]
+    /** 主要诊断类别 MDC 排行（静态回退数据；在线由后端实时聚合） */
+    mdcDistribution?: NameValue[]
     topDiagnoses: DiagnosisStat[]
     topCounties: RegionStat[]
     topFacilities: RegionStat[]
@@ -140,8 +157,11 @@ export interface AggregationRequest {
   filters?: Array<{
     field: string
     op: string
-    value: string | number
+    value?: string | number
+    /** 多值过滤（op=in 时使用） */
+    values?: Array<string | number>
   }>
+  sort?: Array<{ field: string; order: string }>
   limit?: number
 }
 
@@ -202,15 +222,30 @@ export interface ScreenData {
   emergencyRate: number | null
   admissionDistribution: NameValue[]
   paymentDistribution: NameValue[]
+  /** 住院年龄段分布（筛选后后端实时聚合） */
+  ageDistribution: NameValue[]
   topCounties: Array<{ name: string; dischargeCount: number }>
   severityDistribution: NameValue[]
   topDiagnoses: Array<{ name: string; dischargeCount: number }>
+  /** 主要诊断类别 MDC 排行（筛选后后端实时聚合） */
+  mdcDistribution: NameValue[]
+  /** 可视化进阶：全部医院（含所在县/邮编前缀，用于地图点位定位） */
+  hospital3d: Array<{
+    name: string
+    county: string
+    /** 3 位邮编前缀（ZIP3 区域质心定位用；后端不可用时为空串） */
+    zip3: string
+    dischargeCount: number
+    avgCharges: number | null
+  }>
   computedAt: string
 }
 
 export interface FilterState {
-  disease: string
+  /** 疾病多选（空数组 = 全部） */
+  disease: string[]
   age: string
-  hospital: string
+  /** 医院多选（空数组 = 全部） */
+  hospital: string[]
   year: string
 }

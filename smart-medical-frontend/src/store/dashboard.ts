@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 
 import type {
+  AgeGenderStat,
   AggregationRequest,
   AggregationResponse,
   ApiMetaItem,
@@ -24,6 +25,11 @@ interface DashboardState {
   screenData: ScreenData | null
   screenLoading: boolean
   screenError: string | null
+  /** 年龄 × 性别交叉分布（总览页性别切换柱状图；离线时为 null） */
+  ageGenderDistribution: AgeGenderStat[] | null
+  /** 筛选下拉全量选项（疾病/医院，按名称排序；在线聚合 / 离线静态） */
+  filterDiseases: string[]
+  filterHospitals: string[]
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -52,6 +58,9 @@ export const useDashboardStore = defineStore('dashboard', {
     screenData: null,
     screenLoading: false,
     screenError: null,
+    ageGenderDistribution: null,
+    filterDiseases: [],
+    filterHospitals: [],
   }),
   getters: {
     isReady: (state) => Boolean(state.payload),
@@ -141,16 +150,21 @@ export const useDashboardStore = defineStore('dashboard', {
       this.screenLoading = true
       this.screenError = null
 
-      // UI 筛选条件 -> 后端过滤条件（维度 key 见后端 config/registry.py）
-      const conditions: Array<{ field: string; op: string; value: string | number }> = []
-      if (filters.disease && filters.disease !== '全部疾病') {
-        conditions.push({ field: 'ccsr_diagnosis_description', op: 'eq', value: filters.disease })
+      // 界面筛选条件 -> 后端过滤条件（维度字段见后端注册表）
+      const conditions: Array<{
+        field: string
+        op: string
+        value?: string | number
+        values?: Array<string | number>
+      }> = []
+      if (filters.disease.length > 0) {
+        conditions.push({ field: 'ccsr_diagnosis_description', op: 'in', values: filters.disease })
       }
       if (filters.age && filters.age !== '全部年龄') {
         conditions.push({ field: 'age_group', op: 'eq', value: filters.age })
       }
-      if (filters.hospital && filters.hospital !== '全部医院') {
-        conditions.push({ field: 'facility_name', op: 'eq', value: filters.hospital })
+      if (filters.hospital.length > 0) {
+        conditions.push({ field: 'facility_name', op: 'in', values: filters.hospital })
       }
       if (filters.year) {
         conditions.push({ field: 'discharge_year', op: 'eq', value: Number(filters.year) })
@@ -170,15 +184,22 @@ export const useDashboardStore = defineStore('dashboard', {
         })
 
       try {
-        const [kpi, admission, payment, county, severity, diagnoses, emergency] = await Promise.all([
-          run(['discharge_year'], ['discharge_count', 'avg_length_of_stay', 'avg_total_charges', 'avg_total_costs']),
-          run(['type_of_admission'], ['discharge_count'], { sort: [{ field: 'discharge_count', order: 'desc' }], limit: 10 }),
-          run(['payment_typology_1'], ['discharge_count'], { sort: [{ field: 'discharge_count', order: 'desc' }], limit: 6 }),
-          run(['hospital_county'], ['discharge_count'], { sort: [{ field: 'discharge_count', order: 'desc' }], limit: 8 }),
-          run(['apr_severity_of_illness_description'], ['discharge_count'], { sort: [{ field: 'discharge_count', order: 'desc' }], limit: 10 }),
-          run(['ccsr_diagnosis_description'], ['discharge_count'], { sort: [{ field: 'discharge_count', order: 'desc' }], limit: 8 }),
-          run(['emergency_department_indicator'], ['discharge_count'], { limit: 2 }),
-        ])
+        const [kpi, age, admission, payment, county, severity, diagnoses, emergency, hospital3d, mdc] =
+          await Promise.all([
+            run(['discharge_year'], ['discharge_count', 'avg_length_of_stay', 'avg_total_charges', 'avg_total_costs']),
+            run(['age_group'], ['discharge_count'], { sort: [{ field: 'discharge_count', order: 'desc' }], limit: 10 }),
+            run(['type_of_admission'], ['discharge_count'], { sort: [{ field: 'discharge_count', order: 'desc' }], limit: 10 }),
+            run(['payment_typology_1'], ['discharge_count'], { sort: [{ field: 'discharge_count', order: 'desc' }], limit: 6 }),
+            run(['hospital_county'], ['discharge_count'], { sort: [{ field: 'discharge_count', order: 'desc' }], limit: 70 }),
+            run(['apr_severity_of_illness_description'], ['discharge_count'], { sort: [{ field: 'discharge_count', order: 'desc' }], limit: 10 }),
+            run(['ccsr_diagnosis_description'], ['discharge_count'], { sort: [{ field: 'discharge_count', order: 'desc' }], limit: 8 }),
+            run(['emergency_department_indicator'], ['discharge_count'], { limit: 2 }),
+            // 可视化进阶：全部医院（含所在县与邮编前缀，用于地图点位精确定位）
+            // limit 与静态 topFacilities 一致（Top50），避免筛选前后点位数量突增/拥挤
+            run(['facility_name', 'hospital_county', 'zip_code_3_digits'], ['discharge_count', 'avg_total_charges'], { sort: [{ field: 'discharge_count', order: 'desc' }], limit: 50 }),
+            // 主要诊断类别 MDC 排行（底部图表，随筛选联动）
+            run(['apr_mdc_description'], ['discharge_count'], { sort: [{ field: 'discharge_count', order: 'desc' }], limit: 10 }),
+          ])
 
         const kpiRow = kpi.data.rows[0] ?? {}
         const total = Number(kpiRow.discharge_count ?? 0)
@@ -199,6 +220,10 @@ export const useDashboardStore = defineStore('dashboard', {
             name: String(r.payment_typology_1 ?? 'Unknown'),
             value: Number(r.discharge_count ?? 0),
           })),
+          ageDistribution: age.data.rows.map((r) => ({
+            name: String(r.age_group ?? 'Unknown'),
+            value: Number(r.discharge_count ?? 0),
+          })),
           topCounties: county.data.rows.map((r) => ({
             name: String(r.hospital_county ?? 'Unknown'),
             dischargeCount: Number(r.discharge_count ?? 0),
@@ -211,6 +236,17 @@ export const useDashboardStore = defineStore('dashboard', {
             name: String(r.ccsr_diagnosis_description ?? 'Unknown'),
             dischargeCount: Number(r.discharge_count ?? 0),
           })),
+          mdcDistribution: mdc.data.rows.map((r) => ({
+            name: String(r.apr_mdc_description ?? 'Unknown'),
+            value: Number(r.discharge_count ?? 0),
+          })),
+          hospital3d: hospital3d.data.rows.map((r) => ({
+            name: String(r.facility_name ?? 'Unknown'),
+            county: String(r.hospital_county ?? 'Unknown'),
+            zip3: r.zip_code_3_digits == null ? '' : String(r.zip_code_3_digits),
+            dischargeCount: Number(r.discharge_count ?? 0),
+            avgCharges: r.avg_total_charges == null ? null : Number(r.avg_total_charges),
+          })),
           computedAt: new Date().toLocaleTimeString(),
         }
       } catch (error) {
@@ -218,6 +254,79 @@ export const useDashboardStore = defineStore('dashboard', {
         this.screenData = null
       } finally {
         this.screenLoading = false
+      }
+    },
+
+    /** 总览页：加载年龄 × 性别交叉分布（在线聚合；离线时保持 null 由页面降级为全量） */
+    async loadAgeGenderDistribution() {
+      if (!this.apiAvailable) {
+        this.ageGenderDistribution = null
+        return
+      }
+      try {
+        const response = await fetchJson<{ data: AggregationResponse }>(
+          `${this.apiBaseUrl}/aggregations/run`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              dimensions: ['age_group', 'gender'],
+              metrics: ['discharge_count'],
+              limit: 50,
+            }),
+          },
+        )
+        this.ageGenderDistribution = response.data.rows.map((row) => ({
+          age: String(row.age_group ?? 'Unknown'),
+          gender: String(row.gender ?? 'Unknown'),
+          value: Number(row.discharge_count ?? 0),
+        }))
+      } catch (error) {
+        // 聚合失败不影响页面：总览页降级为仅展示全量年龄分布
+        this.ageGenderDistribution = null
+      }
+    },
+
+    /** 大屏筛选下拉全量选项：在线聚合全部疾病/医院（按名称排序）；离线回退静态列表 */
+    async loadFilterOptions() {
+      const sortByName = (a: string, b: string) => a.localeCompare(b, 'en', { sensitivity: 'base' })
+      if (!this.apiAvailable) {
+        this.filterDiseases = [...(this.payload?.filterOptions?.diseases ?? [])].sort(sortByName)
+        this.filterHospitals = [...(this.payload?.filterOptions?.hospitals ?? [])].sort(sortByName)
+        return
+      }
+      try {
+        const [d, h] = await Promise.all([
+          fetchJson<{ data: AggregationResponse }>(`${this.apiBaseUrl}/aggregations/run`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              dimensions: ['ccsr_diagnosis_description'],
+              metrics: ['discharge_count'],
+              limit: 1000,
+            }),
+          }),
+          fetchJson<{ data: AggregationResponse }>(`${this.apiBaseUrl}/aggregations/run`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              dimensions: ['facility_name'],
+              metrics: ['discharge_count'],
+              limit: 1000,
+            }),
+          }),
+        ])
+        this.filterDiseases = d.data.rows
+          .map((r) => String(r.ccsr_diagnosis_description ?? ''))
+          .filter(Boolean)
+          .sort(sortByName)
+        this.filterHospitals = h.data.rows
+          .map((r) => String(r.facility_name ?? ''))
+          .filter(Boolean)
+          .sort(sortByName)
+      } catch {
+        this.filterDiseases = [...(this.payload?.filterOptions?.diseases ?? [])].sort(sortByName)
+        this.filterHospitals = [...(this.payload?.filterOptions?.hospitals ?? [])].sort(sortByName)
       }
     },
   },

@@ -69,21 +69,167 @@ code {
 .app-shell {
   min-height: 100vh;
   display: grid;
-  grid-template-columns: 300px 1fr;
+  grid-template-columns: 1fr;
 }
 
+/* 侧边栏：Edge 风格窄图标栏（rail）——默认 64px 只显示圆形图标，悬停展开为宽栏显示文字 */
 .sidebar {
-  position: sticky;
+  position: fixed;
   top: 0;
-  height: 100vh;
-  padding: 24px 18px;
+  left: 0;
+  bottom: 0;
+  width: 64px;
+  padding: 14px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   background: linear-gradient(180deg, var(--sidebar-bg) 0%, var(--sidebar-bg-dark) 100%);
-  border-right: 1px solid rgba(255, 255, 255, 0.18);
+  border-right: 1px solid rgba(255, 255, 255, 0.14);
+  z-index: 60;
+  overflow: hidden;
+  transition: width 0.22s ease;
+  box-shadow: 4px 0 24px rgba(0, 0, 0, 0.35);
+}
+.sidebar:hover {
+  width: 250px;
 }
 
-.brand-card,
-.sidebar-footnote,
-.nav-item,
+/* 品牌区：窄态只显示 logo 圆标，展开后显示完整品牌文字 */
+.brand-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 0 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  white-space: nowrap;
+}
+.brand-logo {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #38bdf8, #6366f1);
+  color: #fff;
+  box-shadow: 0 4px 14px rgba(56, 189, 248, 0.4);
+}
+.brand-text strong {
+  display: block;
+  font-size: 15px;
+  color: #fff;
+}
+.brand-text small {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--sidebar-muted);
+}
+
+/* 导航：垂直排列的圆形图标按钮（Edge rail 风格） */
+.nav-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 4px 0;
+}
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 0;
+  border-radius: 14px;
+  text-decoration: none;
+  white-space: nowrap;
+  border: 1px solid transparent;
+  transition: background 0.15s ease;
+}
+.nav-item:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+.nav-item.is-active {
+  background: rgba(56, 189, 248, 0.18);
+  border-color: rgba(56, 189, 248, 0.4);
+}
+.nav-icon {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.92);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.nav-item:hover .nav-icon {
+  background: rgba(255, 255, 255, 0.2);
+}
+.nav-item.is-active .nav-icon {
+  background: #38bdf8;
+  color: #062033;
+}
+.nav-text strong {
+  display: block;
+  font-size: 14px;
+  color: #fff;
+}
+.nav-text small {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--sidebar-muted);
+}
+
+/* 侧栏底部：API 连接模式指示灯（窄态只显示居中的圆点） */
+.sidebar-status {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  padding: 10px 0;
+  white-space: nowrap;
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 12px;
+}
+.api-status-dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+.api-status-dot.is-online {
+  background: #34d399;
+  box-shadow: 0 0 8px rgba(52, 211, 153, 0.9);
+}
+.api-status-dot.is-offline {
+  background: #f59e0b;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.8);
+}
+
+/* 窄态：文字完全隐藏（宽度为 0 不露出半个字），展开后淡入显示 */
+.brand-text,
+.nav-text,
+.status-text {
+  min-width: 0;
+  width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  opacity: 0;
+  transition: width 0.18s ease, opacity 0.16s ease;
+}
+.sidebar:hover .brand-text,
+.sidebar:hover .nav-text,
+.sidebar:hover .status-text {
+  width: auto;
+  opacity: 1;
+}
+.sidebar:hover .sidebar-status {
+  justify-content: flex-start;
+  gap: 10px;
+}
+
 .panel,
 .hero-panel,
 .kpi-card,
@@ -96,13 +242,6 @@ code {
   box-shadow: var(--card-shadow);
 }
 
-.brand-card,
-.sidebar-footnote {
-  border-radius: 20px;
-  padding: 20px;
-}
-
-.brand-kicker,
 .eyebrow {
   display: inline-flex;
   align-items: center;
@@ -113,12 +252,6 @@ code {
   text-transform: uppercase;
 }
 
-.brand-card h2 {
-  margin-top: 10px;
-  font-size: 24px;
-}
-
-.brand-card p:last-child,
 .panel-header p,
 .hero-text,
 .kpi-hint,
@@ -129,73 +262,19 @@ code {
 .rule-item p,
 .field span,
 .endpoint-card code,
-.chat-bubble p,
-.nav-item small,
-.topbar-subtitle {
+.chat-bubble p {
   color: var(--text-soft);
-}
-
-.sidebar .brand-card,
-.sidebar .sidebar-footnote {
-  background: rgba(255, 255, 255, 0.12);
-  border-color: rgba(255, 255, 255, 0.22);
-  box-shadow: none;
-  color: var(--sidebar-text);
-}
-
-.sidebar .brand-card h2,
-.sidebar .brand-card p {
-  color: var(--sidebar-text);
-}
-
-.nav-list {
-  margin: 18px 0;
-  display: grid;
-  gap: 12px;
-}
-
-.nav-item {
-  display: grid;
-  grid-template-columns: 44px 1fr;
-  gap: 12px;
-  align-items: center;
-  padding: 14px;
-  border-radius: 18px;
-  text-decoration: none;
-  color: var(--sidebar-text);
-  background: rgba(255, 255, 255, 0.12);
-  border-color: rgba(255, 255, 255, 0.18);
-  box-shadow: none;
-}
-
-.nav-item.is-active {
-  border-color: rgba(255, 255, 255, 0.42);
-  background: rgba(255, 255, 255, 0.22);
-}
-
-.nav-icon {
-  width: 44px;
-  height: 44px;
-  border-radius: 14px;
-  display: grid;
-  place-items: center;
-  background: rgba(255, 255, 255, 0.18);
-  color: rgba(255, 255, 255, 0.95);
-  font-size: 22px;
-}
-
-.nav-item strong {
-  display: block;
-  margin-bottom: 4px;
 }
 
 .main-shell {
   padding: 28px;
+  margin-left: 64px;
+  transition: margin-left 0.22s ease;
 }
 
-.topbar-subtitle {
-  margin-top: 6px;
-  font-size: 13px;
+/* 侧栏展开时主内容区同步让位（Edge rail 联动） */
+.sidebar:hover ~ .main-shell {
+  margin-left: 250px;
 }
 
 .sidebar-note-title {
@@ -231,22 +310,14 @@ code {
 
 .topbar {
   display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 20px;
+  align-items: center;
   margin-bottom: 24px;
 }
 
 .topbar h1 {
-  font-size: 34px;
-  margin-top: 8px;
-}
-
-.topbar-actions {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  flex-wrap: wrap;
+  font-size: 42px;
+  line-height: 1.2;
+  margin: 0;
 }
 
 .mini-badge,
@@ -633,6 +704,11 @@ code {
   z-index: 1;
 }
 
+/* 可搜索多选下拉打开时提升所在字段层级，避免面板被相邻字段遮挡 */
+.screen-field:has(.ss-trigger.is-open) {
+  z-index: 60;
+}
+
 .screen-field span {
   font-size: 12px;
 }
@@ -666,11 +742,6 @@ code {
     grid-template-columns: 1fr;
   }
 
-  .sidebar {
-    position: static;
-    height: auto;
-  }
-
   .kpi-grid,
   .chart-grid--two,
   .bullet-grid,
@@ -698,7 +769,7 @@ code {
 
   .hero-panel h1,
   .topbar h1 {
-    font-size: 28px;
+    font-size: 32px;
   }
 
   .kpi-grid,
@@ -930,6 +1001,21 @@ code {
   border: 1px dashed rgba(114, 188, 255, 0.15);
   border-radius: 8px;
   pointer-events: none;
+}
+
+/* 大屏整页深色模式：进入 /screen 路由时 body 切换为深色，消除深色卡片外的浅色"白色边框" */
+body.theme-dark-screen {
+  --page-bg: #020617;
+  background: #020617;
+}
+
+body.theme-dark-screen .topbar h1 {
+  color: #e2f0ff;
+}
+
+body.theme-dark-screen .screen-shell {
+  border-radius: 0;
+  border-color: rgba(0, 168, 255, 0.2);
 }
 
 .screen-kpi {
