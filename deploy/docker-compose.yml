@@ -70,8 +70,8 @@ services:
       test: ["CMD-SHELL", "hdfs dfsadmin -safemode get | grep -q 'Safe mode is OFF'"]
       interval: 10s
       timeout: 10s
-      retries: 30
-      start_period: 40s
+      retries: 60
+      start_period: 120s
 
   # ---- Redis 结果缓存（沿用既有容器约定）----
   medical-redis:
