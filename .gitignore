@@ -15,6 +15,8 @@ data_process/raw/*.7z
 # 清洗后输出数据（~817 MB）与处理报告（脚本自动生成）
 data_process/processed/*_clean.csv
 data_process/processed/processing_report.json
+# MySQL -> Parquet 列式快照（Spark 直读加速，由后端首次加载自动生成）
+data_process/processed/sparcs_snapshot.parquet/
 
 # 数据库备份文件（人员2 · UC6，mysqldump 生成的大体积 .sql）
 data_process/backups/

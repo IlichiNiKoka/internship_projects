@@ -97,3 +97,27 @@ PONG
 - **优雅关闭优先**：数据库严禁用任务管理器/`taskkill /F` 强杀——MySQL 强杀会导致下次启动需 InnoDB 崩溃恢复（变慢），Redis 强杀会丢失未落盘缓存。
 - **幂等设计**：脚本先检测服务是否已在运行，重复执行不会重复拉起。
 - 环境要求：MySQL 8.x 免安装版 + Redis（Windows 版即可），后端 Spark JDBC 读 MySQL 还需 `mysql-connector-java` jar 放入 `<pyspark>/jars/`（详见根目录 `requirements.txt` 注释）。
+
+---
+
+## 3. Redis 生命周期（2026-08-25 更新）
+
+Redis 已迁移到 Docker 容器 `medical-redis`（镜像 `redis:7-alpine`），生命周期与后端绑定：
+
+| 方式 | 行为 |
+|---|---|
+| `data_process/run.py` 启动 | 自动拉起容器（已在跑则复用；不存在则按配置新建），缓存连接 Redis |
+| 后端 Ctrl+C / 正常退出 | 自动 `docker stop medical-redis` |
+| `start-db.bat` / `stop-db.bat` | 仍可独立启停（内部就是 docker 命令） |
+
+相关 `.env` 配置：
+
+```ini
+ANALYTICS_REDIS_AUTOSTART=true          # 关闭后 run.py 不再自动拉起/停止
+ANALYTICS_REDIS_CONTAINER=medical-redis # 容器名
+ANALYTICS_REDIS_IMAGE=redis:7-alpine    # 首次创建所用镜像
+```
+
+注意：
+- 用 `taskkill /F` 强杀后端进程不会触发优雅停机，Redis 会留在运行状态；
+- Docker Desktop 未启动时，后端照常运行，缓存自动降级为进程内实现。

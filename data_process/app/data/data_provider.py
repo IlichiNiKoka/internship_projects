@@ -23,6 +23,7 @@ import sys
 import threading
 import time
 from abc import ABC, abstractmethod
+from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # 【关键】在任何 pyspark 导入之前预先设置 JAVA_HOME / HADOOP_HOME。
@@ -212,7 +213,61 @@ class MySQLDataProvider(DataProvider):
         s = self._settings
         return f"jdbc:mysql://{s.db_host}:{s.db_port}/{s.db_name}"
 
+    def _try_load_parquet_snapshot(self) -> bool:
+        """尝试直接读 MySQL 落盘的 Parquet 快照（列式 + Snappy，免 JDBC 全表拉取）。
+
+        成功返回 True 并完成 self._df 物化；快照不存在/损坏返回 False，
+        由调用方回退到 JDBC 加载并在加载后重建快照。
+        """
+        s = self._settings
+        if not getattr(s, "parquet_snapshot_enabled", True):
+            return False
+        snap = Path(s.data_parquet_path)
+        if not snap.exists():
+            return False
+        start = time.perf_counter()
+        try:
+            t0 = time.perf_counter()
+            spark = _get_or_create_spark(s)
+            t1 = time.perf_counter()
+            df = spark.read.parquet(snap.as_posix())
+            # 快照由 _write_parquet_snapshot 写出，列名/类型/顺序已对齐 SPARCS_SCHEMA，
+            # 无需再做一遍逐列 cast（省一次全表投影）。
+            expected = [f.name for f in SPARCS_SCHEMA.fields]
+            if list(df.columns) != expected:
+                logger.info("Parquet 快照列与标准 schema 不一致，执行对齐 cast")
+                df = _cast_to_schema(df)
+            df = df.cache()
+            self._row_count = df.count()   # 触发读取并物化缓存
+            t2 = time.perf_counter()
+            self._df = df
+            self._load_seconds = round(time.perf_counter() - start, 2)
+            logger.info(
+                "Parquet 快照加载完成: %d 行，总耗时 %.2fs（Spark 启动 %.2fs + 读取/物化 %.2fs）",
+                self._row_count, self._load_seconds, t1 - t0, t2 - t1)
+            return True
+        except Exception as exc:  # noqa: BLE001 —— 快照损坏时回退 JDBC 重建
+            logger.warning("Parquet 快照不可用（%s），回退 MySQL JDBC 全量加载", exc)
+            self._df = None
+            return False
+
+    def _write_parquet_snapshot(self, df: DataFrame) -> None:
+        """把已对齐 schema 的 DataFrame 写为 Parquet 快照（overwrite，Snappy）。失败不阻塞。"""
+        s = self._settings
+        if not getattr(s, "parquet_snapshot_enabled", True):
+            return
+        snap = Path(s.data_parquet_path)
+        try:
+            snap.parent.mkdir(parents=True, exist_ok=True)
+            df.write.mode("overwrite").option("compression", "snappy").parquet(snap.as_posix())
+            logger.info("MySQL -> Parquet 快照落盘完成: %s", snap)
+        except Exception as exc:  # noqa: BLE001 —— 落盘失败不影响本次服务
+            logger.warning("Parquet 快照写入失败（下次启动仍走 JDBC）: %s", exc)
+
     def _load(self) -> None:
+        # 快路径：已有 Parquet 快照则直读（消除 ~30s 的 JDBC 冷启动加载）
+        if self._try_load_parquet_snapshot():
+            return
         start = time.perf_counter()
         url = self._jdbc_url()
         logger.info("开始从 MySQL 加载数据: %s (table=%s)",
@@ -263,6 +318,9 @@ class MySQLDataProvider(DataProvider):
             self._load_seconds = round(time.perf_counter() - start, 2)
             logger.info("MySQL 数据加载完成: %d 行，耗时 %.2fs",
                         self._row_count, self._load_seconds)
+            # 首次 JDBC 加载后落盘 Parquet 快照，后续启动直读（消除冷启动开销）
+            if getattr(self._settings, "parquet_snapshot_enabled", True):
+                self._write_parquet_snapshot(df)
         except ServiceUnavailableError:
             raise
         except Exception as exc:  # JDBC 驱动缺失 / 连接失败 / SQL 异常统一转 503

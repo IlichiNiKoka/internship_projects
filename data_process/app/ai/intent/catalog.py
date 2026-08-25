@@ -127,6 +127,22 @@ INTENTS: list[IntentSpec] = [
 
 INTENT_BY_KEY: dict[str, IntentSpec] = {i.key: i for i in INTENTS}
 
+# ---------------------------------------------------------------------------
+# 意图别名（Agent 模式 _alg_to_intent_key 会产出 *_query 后缀的历史键名，
+# 若不在注册表中会导致 IntentResult.spec 抛 KeyError -> 500）。
+# 别名统一指向等价 IntentSpec，对外契约（label/downstream/target）保持不变。
+# ---------------------------------------------------------------------------
+INTENT_ALIASES: dict[str, str] = {
+    "cost_prediction_query": "cost_prediction",
+    "readmission_risk_query": "readmission_risk",
+    "aggregation_query": "freeform_query",
+    "statistics_query": "statistics_overview",
+    "association_query": "association_analysis",
+}
+for _alias, _canonical in list(INTENT_ALIASES.items()):
+    if _alias not in INTENT_BY_KEY and _canonical in INTENT_BY_KEY:
+        INTENT_BY_KEY[_alias] = INTENT_BY_KEY[_canonical]
+
 
 def intent_meta() -> list[dict]:
     """供 /api/v1/ai/meta 接口对外暴露意图清单。"""

@@ -2,7 +2,6 @@ import { createRouter, createWebHashHistory } from 'vue-router'
 
 import AssistantView from '../views/AssistantView.vue'
 import BigScreenView from '../views/BigScreenView.vue'
-import LoginView from '../views/LoginView.vue'
 import OverviewView from '../views/OverviewView.vue'
 
 const router = createRouter({
@@ -10,18 +9,7 @@ const router = createRouter({
   routes: [
     {
       path: '/',
-      redirect: '/login',
-    },
-    {
-      path: '/login',
-      name: 'login',
-      component: LoginView,
-      meta: {
-        title: '用户登录',
-        icon: '⎆',
-        description: '平台入口（演示用）',
-        hideInNav: true,
-      },
+      redirect: '/overview',
     },
     {
       path: '/overview',
@@ -41,6 +29,7 @@ const router = createRouter({
         title: '可视化大屏',
         icon: '▣',
         description: '深色大屏与筛选联动',
+        dark: true,
       },
     },
     {
