@@ -104,7 +104,7 @@ internship_projects/
 
 代码集中位于 [data_process/](data_process/)，由四个相互衔接的子系统组成：
 
-1. **数据清洗流水线**（根目录脚本，人员2）：对 SPARCS 2021 数据进行分块读取、清洗、标准化、跨块去重，产出统一字段类型、统一取值域、去重后的高质量 CSV，作为下游分析服务的唯一数据源。
+1. **数据清洗流水线**（根目录脚本，人员2）：对 SPARCS 2021 数据进行分块读取、清洗、标准化、跨块去重，产出统一字段类型、统一取值域、去重后的高质量 CSV；经入库脚本写入 MySQL 数据底座（Docker 容器），作为下游分析服务的数据源。
 2. **大数据分析服务**（`app/` 子目录，人员3）：基于 Flask + PySpark 的 REST 服务，对清洗后数据提供多维度聚合、统计指标、关联分析、住院费用预测、再入院风险评估等接口，供上层 AI 智能层（人员1 / 人员4）调用。
 3. **AI 智能层**（`app/ai/` 子目录，人员4）：自然语言意图识别（≥90% 准确率）+ 分析结果文本生成（DeepSeek/OpenAI 兼容 + Mock 降级 + 幻觉检查）+ 意图识别优化（模糊 / 多维度 / 医疗术语联想），通过 `app/api/v1/ai.py` 对外暴露 REST 接口。
 4. **AI 应用编排层**（`app/application/` 子目录，人员1）：LangChain Tool 注册、意图到分析能力映射、参数转换/重试/结果组装、Redis/LangChain 多轮记忆、历史分析引用和结构化医疗洞察报告，通过 `app/api/v1/application.py` 面向前端提供有状态接口。
@@ -169,7 +169,7 @@ internship_projects/
 
 | 文件 | 职责 |
 |---|---|
-| [data_process/app/data/data_provider.py](data_process/app/data/data_provider.py) | `DataProvider` 抽象 + `SparkDataProvider`（生产）+ `MemoryDataProvider`（测试替身）。`SPARCS_SCHEMA` 显式声明 33 字段类型；`SparkDataProvider._load` 内 `df.cache()` 全表物化，后续聚合全部命中内存缓存 |
+| [data_process/app/data/data_provider.py](data_process/app/data/data_provider.py) | `DataProvider` 抽象 + `MySQLDataProvider`（默认，Docker 容器底座，JDBC 首载后落盘 Parquet 快照）+ `HDFSDataProvider`（Docker HDFS 底座）+ `MemoryDataProvider`（测试替身）。`SPARCS_SCHEMA` 显式声明 33 字段类型并 `df.cache()` 全表物化，后续聚合全部命中内存缓存 |
 
 #### 4.2.3 核心层（响应标准化 / 错误码 / 异常 / 缓存 / 中间件）
 
@@ -242,6 +242,25 @@ internship_projects/
 - Python ≥ 3.12
 - 依赖：pandas、Flask、marshmallow、python-dotenv、pyspark、openai、langchain-core、redis、pytest（详见 [data_process/requirements.txt](data_process/requirements.txt)）
 - Java 8 / 11 / 17（Spark 3.5.1 要求，推荐 17；`app/utils/spark.py` 跨平台自动探测）
+- Docker Desktop（MySQL / HDFS / Redis 基础设施全部容器化，见下节）
+
+### 4.4.1 基础设施一键部署（Docker，2026-08-25 起）
+
+MySQL、HDFS（单机伪分布式 Hadoop 3.5.0）、Redis 三件套已全部迁移到
+Docker 容器，编排文件：[deploy/docker-compose.yml](deploy/docker-compose.yml)。
+数据持久化在具名卷中，删除容器不丢数据。
+
+**新环境部署三步：**
+
+```text
+1. 安装并启动 Docker Desktop；
+2. 把 MySQL 数据文件 sparcs_discharge_2021.ibd 放到项目根目录（不入 Git）；
+3. 双击根目录 deploy-infra.bat，等 Deployment summary 出现即可。
+```
+
+脚本自动完成建库建表 + `.ibd` 表空间导入 + Parquet 快照上传 HDFS，全程幂等。
+日常开发直接 `python run.py`：后端会经 compose 自动拉起未运行的 MySQL/HDFS 容器。
+详细说明与运维命令见 [scripts/README.md](scripts/README.md)；停止全套用根目录 `stop-infra.bat`。
 
 **安装与运行**
 

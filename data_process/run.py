@@ -132,6 +132,65 @@ def _ensure_redis_via_docker(settings) -> str | None:
     return container
 
 
+def _compose_dir(settings) -> Path:
+    """定位 deploy/docker-compose.yml 所在目录（默认项目根 ../deploy）。"""
+    from pathlib import Path
+
+    custom = getattr(settings, "infra_compose_dir", "") or ""
+    if custom:
+        return Path(custom)
+    return Path(__file__).resolve().parent.parent / "deploy"
+
+
+def _ensure_datastore_via_compose(settings) -> dict:
+    """通过根目录 deploy/docker-compose.yml 拉起 MySQL / HDFS 数据底座容器。
+
+    与 Redis 不同：MySQL/HDFS 承载持久化数据，后端退出时**不**停容器
+    （生命周期交给 Docker restart 策略），避免每次启动都重新加载数据。
+    Docker 不可用时只告警不阻塞：后续连接失败会由数据层报 503。
+
+    返回实际拉起的服务名列表（用于启动日志展示）。
+    """
+    started: list[str] = []
+    compose = _compose_dir(settings)
+    if not (compose / "docker-compose.yml").exists():
+        print(f"  * 数据底座 : 未找到 {compose}/docker-compose.yml，跳过自启")
+        return started
+
+    services = []
+    if getattr(settings, "mysql_autostart", True):
+        services.append("medical-mysql")
+    if getattr(settings, "hdfs_autostart", True):
+        services.append("medical-hdfs")
+    if not services:
+        return started
+
+    # Docker 本身不可用时直接放弃
+    if _docker("info").returncode != 0:
+        print("  * 数据底座 : Docker 不可用 —— 跳过 MySQL/HDFS 自启")
+        return started
+
+    result = _docker(
+        "compose", "-f", str(compose / "docker-compose.yml"),
+        "up", "-d", *services,
+    )
+    if result.returncode != 0:
+        print(f"  * 数据底座 : docker compose up 失败："
+              f"{(result.stderr or '').strip().splitlines()[-1:]}")
+        return started
+    started.extend(services)
+
+    # 等待端口就绪（首次导入 .ibd/dump 可能较久，这里只做有限等待）
+    for svc, port in (("medical-mysql", int(settings.db_port)),
+                      ("medical-hdfs", 8020)):
+        for _ in range(30):          # 最多等 150s
+            if _redis_reachable("127.0.0.1", port):
+                break
+            time.sleep(5)
+    print(f"  * 数据底座 : 已通过 docker compose 拉起 {'/'.join(services)}")
+    return started
+
+
 def _stop_redis_on_exit(container: str | None) -> None:
     """后端退出时优雅停掉由本进程接管的 Redis 容器。
 
@@ -175,6 +234,9 @@ def _stop_redis_on_exit(container: str | None) -> None:
 def main() -> None:
     settings = Settings.load()
 
+    # MySQL / HDFS 数据底座自启（在 create_app 之前：DataProvider 会连库）
+    datastore = _ensure_datastore_via_compose(settings)
+
     # Redis 自启（在 create_app 之前：build_cache 会立刻 ping Redis）
     redis_container = _ensure_redis_via_docker(settings)
     _stop_redis_on_exit(redis_container)   # 后端停，Redis 停
@@ -191,6 +253,8 @@ def main() -> None:
     if redis_container:
         print(f"  * Redis    : docker:{redis_container}"
               f"（{settings.redis_host}:{settings.redis_port}，随服务退出自动停止）")
+    if datastore:
+        print(f"  * 数据底座 : docker compose:{','.join(datastore)}（随 Docker 常驻，退出不停）")
     print(f"  * 服务地址 : http://{settings.host}:{settings.port}")
     print(f"  * 健康检查 : http://{settings.host}:{settings.port}/api/v1/health\n")
     app.run(host=settings.host, port=settings.port, debug=settings.debug,

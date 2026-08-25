@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
-"""数据层：DataProvider 抽象 + Spark CSV 实现 + 测试用内存实现。
+"""数据层：DataProvider 抽象 + MySQL/HDFS 实现 + 测试用内存实现。
 
 设计要点：
-  * 服务层/算法层只依赖 DataProvider.dataframe()，不关心数据来自 Spark CSV、
-    Hive 还是测试内存 DataFrame —— 换数据源不动业务代码；
-  * SparkDataProvider 惰性加载 + cache()：首次查询触发一次全表扫描，
-    后续聚合全部命中内存缓存，大幅降低重复查询延迟；
+  * 服务层/算法层只依赖 DataProvider.dataframe()，不关心数据来自
+    MySQL（Docker 容器底座）、HDFS 还是测试内存 DataFrame —— 换数据源不动业务代码；
+  * MySQL 路径：Spark JDBC 首次全量加载后落盘 Parquet 快照，后续启动直读快照；
   * 显式 schema：按清洗后数据字典定义类型，读取速度与稳定性均优于推断。
 
 注意：
@@ -129,61 +128,6 @@ class DataProvider(ABC):
     @abstractmethod
     def status(self) -> dict:
         """数据源健康状态（行数、加载耗时等）。"""
-
-
-class SparkDataProvider(DataProvider):
-    """从清洗后 CSV 加载数据（Spark 本地/集群均可）。"""
-
-    def __init__(self, settings: Settings):
-        self._settings = settings
-        self._df: DataFrame | None = None
-        self._row_count: int | None = None
-        self._load_seconds: float | None = None
-        self._lock = threading.Lock()
-
-    def dataframe(self) -> DataFrame:
-        # 双重检查锁：前端大屏首次打开会并发多个聚合请求，若不互斥，
-        # 会同时触发全量加载（200 万行），Spark local 模式下互相抢资源卡死。
-        if self._df is None:
-            with self._lock:
-                if self._df is None:
-                    self._load()
-        return self._df
-
-    def _load(self) -> None:
-        csv_path = self._settings.data_csv_path
-        if not csv_path.exists():
-            raise ServiceUnavailableError(
-                message=f"清洗后数据文件不存在: {csv_path}（请先运行数据预处理流水线）",
-                detail={"path": str(csv_path)},
-            )
-        start = time.perf_counter()
-        logger.info("开始加载数据: %s (master=%s)", csv_path, self._settings.spark_master)
-        try:
-            spark = _get_or_create_spark(self._settings)
-            df = _read_csv_and_cast(spark, csv_path.as_posix())
-            df = df.cache()                    # 缓存全表，后续聚合复用
-            self._row_count = df.count()       # 触发加载并物化缓存
-            self._df = df
-            self._load_seconds = round(time.perf_counter() - start, 2)
-            logger.info("数据加载完成: %d 行，耗时 %.2fs", self._row_count, self._load_seconds)
-        except ServiceUnavailableError:
-            raise
-        except Exception as exc:  # Spark 启动/读取失败统一转 503
-            logger.exception("数据加载失败")
-            raise ServiceUnavailableError(
-                message=f"数据加载失败: {exc}",
-                detail={"path": str(csv_path)},
-            ) from exc
-
-    def status(self) -> dict:
-        return {
-            "data_source": str(self._settings.data_csv_path),
-            "spark_master": self._settings.spark_master,
-            "loaded": self._df is not None,
-            "row_count": self._row_count,
-            "load_seconds": self._load_seconds,
-        }
 
 
 class MySQLDataProvider(DataProvider):
@@ -434,23 +378,20 @@ def _get_or_create_spark(settings: Settings) -> SparkSession:
 
 
 def build_data_provider(settings: Settings) -> DataProvider:
-    """按 `data_source` 配置构建数据提供者（二期：csv / mysql / hdfs 数据底座）。
+    """按 `data_source` 配置构建数据提供者（二期数据底座：mysql / hdfs）。
 
-    * csv    -> SparkDataProvider（本地清洗后 CSV，一期默认）
-    * mysql  -> MySQLDataProvider（读取人员2 入库的 MySQL 表）
-    * hdfs   -> HDFSDataProvider（读取 HDFS 上的清洗后数据）
+    * mysql  -> MySQLDataProvider（读取 Docker 容器 medical-mysql 入库表，默认）
+    * hdfs   -> HDFSDataProvider（读取 Docker 容器 medical-hdfs 上的数据）
 
     业务代码（服务层 / 算法层）只依赖 DataProvider.dataframe()，
     换数据源无需改动，只需在 .env 切换 ANALYTICS_DATA_SOURCE。
     """
-    source = (getattr(settings, "data_source", "csv") or "csv").strip().lower()
-    if source == "csv":
-        return SparkDataProvider(settings)
+    source = (getattr(settings, "data_source", "mysql") or "mysql").strip().lower()
     if source == "mysql":
         return MySQLDataProvider(settings)
     if source == "hdfs":
         return HDFSDataProvider(settings)
     raise ServiceUnavailableError(
-        message=f"不支持的数据源配置: {source}（可选 csv / mysql / hdfs）",
+        message=f"不支持的数据源配置: {source}（可选 mysql / hdfs）",
         detail={"data_source": source},
     )

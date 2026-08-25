@@ -21,6 +21,12 @@ data_process/processed/sparcs_snapshot.parquet/
 # 数据库备份文件（人员2 · UC6，mysqldump 生成的大体积 .sql）
 data_process/backups/
 
+# Docker 基础设施数据文件（不入库，由 deploy-infra.bat 本地导入）
+/sparcs_discharge_2021.ibd
+deploy/mysql-init/*.gz
+deploy/mysql-init/*.sql
+deploy/mysql-init/*.zip
+
 # ------------------------------
 # 2. Python 编译产物与字节码
 # ------------------------------

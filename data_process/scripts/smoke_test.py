@@ -32,7 +32,7 @@ def _check(name: str, ok: bool, extra: str = "") -> None:
 def main() -> int:
     settings = Settings.load()
     print(f"服务: {settings.app_name} v{settings.version}")
-    print(f"数据: {settings.data_csv_path}")
+    print(f"数据源: {settings.data_source}（Docker 底座）")
     print(f"Spark: {settings.spark_master}")
 
     app = create_app(settings)
