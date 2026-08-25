@@ -144,18 +144,26 @@ def _build_tools_table() -> str:
         "  name: string                必填，算法名，必须在以下列表中之一\n"
         "  params: object              可选，算法特定参数，示例见下\n\n"
         "  算法名（name）：\n"
-        "    - statistics_overview      平台总览统计，params 可选: {\"years\": [2021]}\n"
-        "    - association              疾病关联分析，params: "
-        "{\"target\": \"ccsr_diagnosis_description\", \"columns\": [\"type_of_admission\"], "
-        "\"top_k\": 20, \"min_support\": 0.05}\n"
-        "    - cost_prediction          住院费用预测，params: "
-        "{\"feature\": {\"age_group\": \"30 to 49\", \"type_of_admission\": \"Emergency\", \"length_of_stay\": 5, "
-        "\"apr_severity_of_illness_code\": 3}}\n"
-        "    - readmission_risk         再入院风险评估，params: "
-        "{\"mode\": \"population|single\", "
-        "\"group_by\": [\"age_group\"], \"threshold\": 0.2, "
-        "\"feature\": {……同 cost_prediction……}}\n\n"
-        "【元数据工具（metadata）契约】\n"
+        "    - statistics               平台总览统计，params 可选: {\"top_n\": 10}\n"
+        "                               （各分布返回的头部条目数，1~50）\n"
+        "    - association              疾病关联分析，params 全部可选:\n"
+        "        {\"antecedent\": \"ccsr_diagnosis_description\",\n"
+        "         \"consequent\": \"ccsr_procedure_description\",\n"
+        "         \"min_support\": 0.005, \"top_n\": 20}\n"
+        "        antecedent/consequent 可选值：ccsr_diagnosis_description / ccsr_diagnosis_code /\n"
+        "        ccsr_procedure_description / ccsr_procedure_code / apr_mdc_description /\n"
+        "        apr_severity_of_illness_description / type_of_admission / payment_typology_1 / age_group\n"
+        "    - cost_prediction          住院费用预测，params 可选:\n"
+        "        {\"mode\": \"train\", \"sample_size\": 100000, \"train_ratio\": 0.8,\n"
+        "         \"sample\": {\"age_group\": \"30 to 49\", \"type_of_admission\": \"Emergency\",\n"
+        "                    \"length_of_stay\": 5, \"apr_severity_of_illness_code\": 3}}\n"
+        "        mode=train 训练评估；mode=predict 时 sample 必填\n"
+        "    - readmission_risk         再入院风险评估，params 可选:\n"
+        "        {\"mode\": \"profile\"}\n"
+        "        mode=profile 人群画像；mode=score 单例评估（此时 sample 必填，同上）\n"
+        "    - group_aggregation        分组聚合（一般优先用 aggregation 工具即可），params:\n"
+        "        {\"dimensions\": [\"age_group\"], \"metrics\": [\"discharge_count\"]}\n"
+        "        【元数据工具（metadata）契约】\n"
         "params: {\"kind\": \"dimensions\" | \"metrics\" | \"algorithms\"}\n"
         "  - dimensions: 返回 DIMENSIONS 维度白名单元数据\n"
         "  - metrics: 返回 METRICS 指标白名单元数据\n"
@@ -339,13 +347,17 @@ def _validate_agg_params(params: dict[str, Any]) -> tuple[dict, str | None]:
 
 
 _VALID_ALG_NAMES = {
-    "statistics_overview", "association", "cost_prediction",
+    "statistics", "association", "cost_prediction",
     "readmission_risk", "group_aggregation",
 }
 
 
 def _validate_alg_params(params: dict[str, Any]) -> tuple[dict, str | None]:
     name = params.get("name")
+    # 历史别名归一：早期提示词曾把平台总览写作 statistics_overview，
+    # 兼容模型惯性输出旧名，映射到注册表真名 statistics。
+    if isinstance(name, str) and name.strip() == "statistics_overview":
+        name = "statistics"
     if not isinstance(name, str) or name not in _VALID_ALG_NAMES:
         return {}, f"algorithm name 非法，允许：{sorted(_VALID_ALG_NAMES)}"
     sub = params.get("params") or {}
@@ -499,7 +511,7 @@ class ToolPlanningAgent:
                 return {
                     "kind": "algorithms",
                     "data": [
-                        {"name": "statistics_overview", "description": "平台总览统计（默认年份 2021）"},
+                        {"name": "statistics", "description": "平台总览统计（默认年份 2021）"},
                         {"name": "association", "description": "疾病/操作与维度的关联分析"},
                         {"name": "cost_prediction", "description": "基于患者特征预测住院费用"},
                         {"name": "readmission_risk", "description": "再入院风险评估（人群或单例）"},

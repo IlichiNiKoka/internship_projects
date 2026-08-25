@@ -78,10 +78,14 @@ class OpenAICompatibleClient:
 
     def chat(self, system_prompt: str, user_prompt: str) -> str:
         """调用 chat completions API（空响应自动重试）。"""
+        # trust_env=False：忽略系统/环境代理（如 Windows 注册表代理）。
+        # 否则本机代理未运行时，连 localhost Ollama 也会被代理拦截报 Connection error。
+        import httpx
         client = self._OpenAI_cls(
             api_key=self._api_key,
             base_url=self._base_url,
             timeout=self._timeout,
+            http_client=httpx.Client(trust_env=False, timeout=self._timeout),
         )
         import time
         last_err: Exception | None = None
