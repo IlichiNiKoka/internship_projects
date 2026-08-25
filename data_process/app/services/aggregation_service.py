@@ -16,6 +16,7 @@ import hashlib
 import json
 import logging
 import math
+import threading
 import time
 from functools import reduce
 from typing import Any
@@ -45,6 +46,31 @@ from config.registry import (
 from config.settings import Settings
 
 logger = logging.getLogger(__name__)
+
+
+class _SingleFlight:
+    """同 key 并发去重：相同 cache_key 的并发请求只放第一个去算，其余等待后读缓存。
+
+    前端大屏首次打开会同时发出多个完全相同的聚合请求，若无去重，
+    每个请求都会触发一次 Spark 作业白白抢占资源；
+    single-flight 保证同一 key 只有一个 Spark 作业在跑。
+    """
+
+    def __init__(self) -> None:
+        self._locks: dict[str, threading.Lock] = {}
+        self._guard = threading.Lock()
+
+    def acquire(self, key: str) -> threading.Lock:
+        with self._guard:
+            lock = self._locks.get(key)
+            if lock is None:
+                lock = threading.Lock()
+                self._locks[key] = lock
+            lock.acquire()
+            return lock
+
+
+_SINGLE_FLIGHT = _SingleFlight()
 
 
 def _safe_value(value: Any) -> Any:
@@ -97,7 +123,7 @@ class AggregationService:
         sort_specs = self._normalize_sort(request.get("sort") or [], metrics)
         use_pagination = page is not None
 
-        # ---- 2. 缓存查询（相同口径的重复请求直接命中，分页参数参与缓存键）----
+        # ---- 2. 缓存查询 + 同 key 并发去重（single-flight）----
         cache_key = self._cache_key(dimensions, metrics, filters, sort_specs,
                                     limit, page, page_size)
         if use_cache:
@@ -107,6 +133,26 @@ class AggregationService:
                 cached["cached"] = True
                 return cached
 
+        # 同 key 并发去重：第一个请求持锁计算，其余等锁释放后直接读缓存；
+        # 若等待后缓存仍未命中（前一个请求失败），则自己重算一次。
+        flight_lock = _SINGLE_FLIGHT.acquire(cache_key)
+        try:
+            if use_cache:
+                cached = self._cache.get(cache_key)
+                if cached is not None:
+                    logger.info("聚合结果命中缓存(去重等待后): %s", cache_key)
+                    cached["cached"] = True
+                    return cached
+            return self._compute_and_cache(
+                cache_key, dimensions, metrics, filters, sort_specs,
+                limit, page, page_size, use_pagination, use_cache)
+        finally:
+            flight_lock.release()
+
+    def _compute_and_cache(self, cache_key, dimensions, metrics, filters,
+                           sort_specs, limit, page, page_size,
+                           use_pagination: bool, use_cache: bool) -> dict:
+        """实际执行 Spark 聚合并写缓存（由 single-flight 互斥调用）。"""
         # ---- 3. Spark 分组聚合计算（二期 3.3.4：超时控制 -> 504 降级）----
         fetch_limit = page * page_size if use_pagination else limit
         start = time.perf_counter()

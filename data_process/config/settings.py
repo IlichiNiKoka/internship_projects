@@ -60,6 +60,10 @@ class Settings:
     # HDFS 数据底座
     hdfs_namenode: str = ""                 # NameNode 地址，如 hdfs://namenode:8020（留空用默认）
     hdfs_path: str = ""                     # HDFS 上清洗后数据路径，如 /data/sparcs_clean.csv
+    # MySQL -> Parquet 列式快照（性能优化）：首次 JDBC 全量读取后落盘为 Parquet，
+    # 后续启动直接读 Parquet（Snappy 列存，免 JDBC 拉取 200 万行），消除 ~30s 冷启动加载。
+    parquet_snapshot_enabled: bool = True
+    data_parquet_path: Path = BASE_DIR / "processed" / "sparcs_snapshot.parquet"
 
     # ---- 结构化大数据入库（人员2 · 二期 MySQL / SQLite 兜底）----
     # engine: auto(MySQL 优先，失败降级 SQLite) / mysql / sqlite
@@ -80,6 +84,7 @@ class Settings:
     spark_java_home: str = ""               # 留空自动探测（见 utils/spark.py）
     spark_hadoop_home: str = ""             # 留空自动探测（Windows 下必填路径含 bin/winutils.exe）
     spark_shuffle_partitions: int = 8       # 本地模式无需过多分区
+    spark_extra_library_path: str = ""      # 显式指定 openblas/lapack 原生库目录（留空自动探测）
     spark_adaptive_enabled: bool = True     # Spark SQL AQE 自适应执行（二期任务参数优化）
 
     # ---- 结果缓存（一期：进程内 TTL 缓存；二期支持 Redis 后端）----
@@ -92,6 +97,10 @@ class Settings:
     redis_db: int = 0
     redis_password: str = ""
     redis_connect_timeout: float = 2.0     # 连接/读写超时（秒）
+    # 后端启动时自动拉起 Redis Docker 容器（见 run.py::_ensure_redis_via_docker）
+    redis_autostart: bool = True
+    redis_container: str = "medical-redis"   # 容器名（不存在时会以该名新建）
+    redis_image: str = "redis:7-alpine"      # 新建容器使用的镜像
 
     # ---- 超时与慢查询（二期 3.3.4 API 性能优化）----
     agg_timeout_seconds: float = 120.0     # 聚合计算超时阈值，<=0 表示不限制
@@ -109,7 +118,12 @@ class Settings:
     # ---- 聚合接口限制 ----
     agg_default_limit: int = 100
     agg_max_limit: int = 1000
-    agg_max_dimensions: int = 5             # 单次查询最多组合维度数
+    agg_max_dimensions: int = 5             # 单次聚合最多组合维度数
+
+    # ---- 启动预热 ----
+    # 服务启动后在后台线程预加载 Spark 数据源（Parquet 快照 ~20s），
+    # 让首个用户请求不必承担冷启动开销；testing 环境自动跳过。
+    warmup_on_startup: bool = True             # 单次查询最多组合维度数
 
     # ---- 机器学习 ----
     ml_sample_size: int = 100_000           # 费用预测训练样本上限（平衡精度与耗时）
@@ -126,6 +140,11 @@ class Settings:
     # 默认模型：DeepSeek-V3（OpenAI 兼容接口）。可改为 deepseek-reasoner（R1）或 gpt-4o-mini 等
     llm_model: str = "deepseek-chat"
     llm_timeout: int = 30                  # 单次 LLM 调用超时（秒）
+    # 重试策略（二期优化）：重试次数 + 总预算双重限制，避免慢端点阻塞用户几十秒
+    llm_max_retries: int = 1               # 失败后最大重试次数
+    llm_retry_budget_seconds: float = 45.0  # 含首次调用在内的总耗时预算（秒），超出即放弃降级 Mock
+    llm_ollama_think: bool = False         # provider=ollama 时是否开启思考链（关闭可大幅降低延迟）
+    llm_extra_body: str = ""               # OpenAI 兼容端点额外请求体（JSON），如 {"reasoning_effort": "none"}
     llm_temperature: float = 0.2           # 低温度减少幻觉
     llm_max_tokens: int = 4000             # 文本生成最大 token（DeepSeek V4 Flash 需更大 token 防止思考内容被截断）
     # 意图识别：达标阈值（低于此值时分类器输出 unsupported）

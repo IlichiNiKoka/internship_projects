@@ -81,7 +81,13 @@ class CostPredictionAlgorithm(Algorithm):
     # ------------------------------------------------------------------
     @staticmethod
     def _build_training_frame(df: DataFrame, sample_size: int) -> DataFrame:
-        """清洗训练样本：费用>0、核心特征非空、移除缺失哨兵。"""
+        """清洗训练样本：费用>0、核心特征非空、移除缺失哨兵。
+
+        采样完全下推到 Spark：先用缓存好的全表 count 换算采样比例，
+        再用 sample(fraction) 抽样，不使用 limit() —— limit 会把扫描
+        收敛到首部分区并在 driver 端截断，大表上既慢又容易把数据拉向
+        一端；sample 则在各 executor 本地完成，无 driver 集中开销。
+        """
         keep = (
             (F.col(_LABEL) > 0)
             & F.col(_LABEL).isNotNull()
@@ -90,11 +96,15 @@ class CostPredictionAlgorithm(Algorithm):
         )
         for _, col in _CATEGORICAL_FEATURES:
             keep = keep & (F.col(col) != "Unknown") & F.col(col).isNotNull()
-        return (
-            df.filter(keep)
-            .sample(withReplacement=False, fraction=1.0, seed=42)
-            .limit(sample_size)
-        )
+        cleaned = df.filter(keep)
+        # fraction = 目标样本量 / 清洗后总量（1.05 倍上浮补偿抽样随机性）。
+        # count 走的是已 cache 的全表，代价可忽略；清洗后行数未知时回退全量。
+        total = cleaned.count()
+        if total and total > 0:
+            fraction = min(1.0, sample_size * 1.05 / float(total))
+        else:
+            fraction = 1.0
+        return cleaned.sample(withReplacement=False, fraction=fraction, seed=42)
 
     def _train(self, ctx: AlgorithmContext) -> tuple[Any, dict | None, str]:
         params = ctx.params

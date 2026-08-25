@@ -153,6 +153,54 @@ def _pyarrow_available() -> bool:
     return importlib.util.find_spec("pyarrow") is not None
 
 
+# ---------------------------------------------------------------------------
+# 原生数学库（OpenBLAS / LAPACK）探测：
+#   Windows 下 Spark ML（breeze -> netlib-java）找不到原生 BLAS 时会回退到
+#   慢速 Java 实现并刷 WARN。解决方式：把含 openblas/lapack DLL 的目录注入
+#   spark.driver.extraLibraryPath / spark.executor.extraLibraryPath。
+#   本机无需额外安装：venv 里的 numpy/scipy wheel 自带 libscipy_openblas64_*.dll。
+# 可用 ANALYTICS_SPARK_EXTRA_LIBRARY_PATH 强制指定（多个路径用分号分隔）。
+# ---------------------------------------------------------------------------
+def _dir_has_blas(d: Path) -> bool:
+    """目录下是否存在 openblas/lapack 动态库。"""
+    try:
+        for p in d.iterdir():
+            name = p.name.lower()
+            if "openblas" in name or name.startswith(("liblapack", "lapack")):
+                return True
+    except OSError:
+        pass
+    return False
+
+
+def _detect_native_blas_dirs(extra: str = "") -> list[str]:
+    """探测本机可用的 OpenBLAS/LAPACK DLL 目录（显式配置优先）。"""
+    dirs: list[str] = []
+    # 1) 显式配置优先（支持分号分隔多个）
+    if extra and extra.strip():
+        dirs.extend(p for p in (s.strip() for s in extra.split(";") if s.strip()))
+    candidates: list[Path] = []
+    # 2) 当前 Python 环境的 numpy wheel 自带 OpenBLAS
+    try:
+        import numpy as _np
+        numpy_dir = Path(_np.__file__).resolve().parent
+        candidates.append(numpy_dir.parent / "numpy.libs")            # pip wheel 布局
+        candidates.append(numpy_dir / ".libs")                        # 备选布局
+        candidates.append(numpy_dir.parent / "Library" / "bin")       # conda win 布局
+    except Exception:  # noqa: BLE001
+        pass
+    # 3) scipy wheel 同样自带
+    try:
+        import scipy as _sp
+        candidates.append(Path(_sp.__file__).resolve().parent.parent / "scipy.libs")
+    except Exception:  # noqa: BLE001
+        pass
+    for c in candidates:
+        if c.is_dir() and str(c) not in dirs and _dir_has_blas(c):
+            dirs.append(str(c))
+    return dirs
+
+
 # Windows 下 Spark 创建本地临时目录依赖 winutils.exe（hadoop.dll），
 # 若 HADOOP_HOME 未设置会报 "HADOOP_HOME and hadoop.home.dir are unset"
 _HADOOP_HOME_CANDIDATES: list[str] = [
@@ -257,6 +305,22 @@ def build_spark_session(settings: Settings) -> SparkSession:
             "spark.driver.extraJavaOptions",
             f"-Dhadoop.home.dir={hadoop_home_jvm}",
         )
+
+    # 原生数学库注入（openblas/lapack）：修复 Spark ML 在 Windows 上
+    # 找不到原生 BLAS 导致的 WARN 与慢速回退。driver 与 executor 都要配。
+    native_dirs = _detect_native_blas_dirs(
+        getattr(settings, "spark_extra_library_path", "") or "")
+    if native_dirs:
+        lib_path = os.pathsep.join(native_dirs).replace("\\", "/")
+        builder = (
+            builder
+            .config("spark.driver.extraLibraryPath", lib_path)
+            .config("spark.executor.extraLibraryPath", lib_path)
+        )
+        logger.info("Spark 环境：extraLibraryPath=%s（openblas/lapack）", lib_path)
+    else:
+        logger.info("Spark 环境：未探测到 openblas/lapack 原生库，Spark ML 使用 Java 回退实现")
+
     spark = builder.getOrCreate()
     spark.sparkContext.setLogLevel(settings.spark_log_level)
     return spark

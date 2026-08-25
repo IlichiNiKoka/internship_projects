@@ -43,10 +43,33 @@ def create_app(settings: Settings | None = None, data_provider=None) -> Flask:
     ext.rate_limiter = SlidingWindowLimiter()
 
     # 4) 数据源（按 data_source 配置选择 csv / mysql / hdfs；测试可注入替身）
+    data_provider_was_injected = data_provider is not None
     if data_provider is None:
         from app.data.data_provider import build_data_provider
         data_provider = build_data_provider(settings)
     ext.data_provider = data_provider
+
+    # 4.5) 启动预热：后台线程预加载数据源，首个用户请求不再承担冷启动开销。
+    # DataProvider 实现内部有双重检查锁，与预热线程并发安全。
+    # 仅对内部构建的真实数据源生效；测试注入的替身（内存 DataFrame）不预热，
+    # 且 testing 环境一律跳过，避免测试被 Spark 启动拖慢。
+    if (
+        data_provider_was_injected is False
+        and getattr(settings, "warmup_on_startup", False)
+        and settings.env != "testing"
+    ):
+        import threading
+
+        def _warmup() -> None:
+            try:
+                data_provider.dataframe()
+                status = data_provider.status()
+                logger.info("启动预热完成: %s 行，耗时 %ss",
+                            status.get("row_count"), status.get("load_seconds"))
+            except Exception as exc:  # noqa: BLE001 —— 预热失败不阻塞服务，首次请求再试
+                logger.warning("启动预热失败（将在首次请求时重试）: %s", exc)
+
+        threading.Thread(target=_warmup, daemon=True, name="data-warmup").start()
 
     # 5) 算法组件注册（幂等）
     from app.algorithms.base import register_builtin_algorithms
