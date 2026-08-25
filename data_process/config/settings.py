@@ -23,13 +23,7 @@ from dotenv import load_dotenv
 # ---------------------------------------------------------------------------
 BASE_DIR = Path(__file__).resolve().parent.parent      # data_process/
 LOG_DIR_DEFAULT = BASE_DIR / "logs"
-
-# 清洗后数据默认路径（由数据清洗流水线产出，位于本项目的 processed/ 目录）
-DEFAULT_CLEAN_CSV = (
-    BASE_DIR
-    / "processed"
-    / "Hospital_Inpatient_Discharges__SPARCS_De-Identified___2021_20231012_clean.csv"
-)
+PROCESSED_DIR = BASE_DIR / "processed"
 
 
 def _parse_bool(raw: str | None, default: bool) -> bool:
@@ -51,9 +45,8 @@ class Settings:
     debug: bool = False
 
     # ---- 数据源 ----
-    data_csv_path: Path = DEFAULT_CLEAN_CSV
-    # 数据提供者类型：csv（本地清洗后 CSV，一期）/ mysql / hdfs（二期数据底座）
-    data_source: str = "csv"
+    # 数据提供者类型：mysql / hdfs（二期数据底座，均由 Docker 容器提供）
+    data_source: str = "mysql"
     # MySQL 数据底座：复用人员2 入库的 db_* 连接参数，走 Spark JDBC 读取入库表
     mysql_jdbc_driver: str = "com.mysql.cj.jdbc.Driver"   # MySQL Connector/J 驱动类
     mysql_jdbc_connect_timeout_ms: int = 5000             # JDBC 建连超时（毫秒）
@@ -63,7 +56,7 @@ class Settings:
     # MySQL -> Parquet 列式快照（性能优化）：首次 JDBC 全量读取后落盘为 Parquet，
     # 后续启动直接读 Parquet（Snappy 列存，免 JDBC 拉取 200 万行），消除 ~30s 冷启动加载。
     parquet_snapshot_enabled: bool = True
-    data_parquet_path: Path = BASE_DIR / "processed" / "sparcs_snapshot.parquet"
+    data_parquet_path: Path = PROCESSED_DIR / "sparcs_snapshot.parquet"
 
     # ---- 结构化大数据入库（人员2 · 二期 MySQL / SQLite 兜底）----
     # engine: auto(MySQL 优先，失败降级 SQLite) / mysql / sqlite
@@ -75,7 +68,7 @@ class Settings:
     db_name: str = "medical_analytics"
     db_table: str = "sparcs_discharge_2021"
     db_batch_size: int = 10000          # 每批写入行数（批量 INSERT，避免单条过慢）
-    db_sqlite_path: Path = DEFAULT_CLEAN_CSV.parent / "sparcs.db"  # SQLite 兜底文件
+    db_sqlite_path: Path = PROCESSED_DIR / "sparcs.db"  # SQLite 兜底文件
 
     # ---- Spark ----
     spark_master: str = "local[*]"          # 生产可改为 yarn / spark://...
@@ -101,6 +94,13 @@ class Settings:
     redis_autostart: bool = True
     redis_container: str = "medical-redis"   # 容器名（不存在时会以该名新建）
     redis_image: str = "redis:7-alpine"      # 新建容器使用的镜像
+
+    # ---- 数据底座 Docker 自启（MySQL / HDFS，见 run.py::_ensure_datastore_via_compose）----
+    # 通过根目录 deploy/docker-compose.yml 拉起；随 Docker 自身生命周期管理，
+    # 后端退出时不停这两个容器（持久化数据，重启成本低、避免重复导入）。
+    mysql_autostart: bool = True             # 后端启动时自动拉起 medical-mysql 容器
+    hdfs_autostart: bool = True              # 后端启动时自动拉起 medical-hdfs 容器
+    infra_compose_dir: str = ""              # compose 文件所在目录，留空用项目根 ../deploy
 
     # ---- 超时与慢查询（二期 3.3.4 API 性能优化）----
     agg_timeout_seconds: float = 120.0     # 聚合计算超时阈值，<=0 表示不限制
@@ -186,11 +186,10 @@ class Settings:
 
 
 # 测试用最小配置（tests/conftest.py 中再细化）
-def testing_settings(tmp_dir: Path, data_csv: Path | None = None) -> Settings:
+def testing_settings(tmp_dir: Path, **_: object) -> Settings:
     return Settings(
         env="testing",
         debug=False,
-        data_csv_path=data_csv or DEFAULT_CLEAN_CSV,
         spark_master="local[2]",
         spark_log_level="ERROR",
         cache_enabled=False,

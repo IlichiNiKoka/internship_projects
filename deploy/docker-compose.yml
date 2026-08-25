@@ -1,0 +1,94 @@
+# =============================================================
+# 智慧医疗大数据平台 · 基础设施容器编排（MySQL / HDFS / Redis）
+#
+# 用法（在 deploy/ 目录下执行）：
+#   docker compose up -d              # 启动全部三个服务
+#   docker compose up -d medical-mysql    # 只启动某个服务
+#   docker compose down               # 停止并移除容器（数据卷保留，不丢数据）
+#   docker compose ps                 # 查看状态
+#   docker compose logs -f medical-hdfs
+#
+# 数据持久化：
+#   * MySQL 数据 -> 具名卷 medical-mysql-data（首次启动自动导入
+#     mysql-init/*.sql.gz 初始化数据）
+#   * HDFS 数据  -> 具名卷 medical-hdfs-namenode / medical-hdfs-datanode
+#   * Redis      -> 无持久化（缓存可随时重建）
+#
+# 注意：宿主机 3306 端口若被本机原生 MySQL 服务占用，需先停掉
+#       （net stop MySQL80），否则容器端口映射失败。
+# =============================================================
+
+services:
+
+  # ---- MySQL 数据底座（结构化入库表 sparcs_discharge_2021）----
+  medical-mysql:
+    image: mysql:8.0
+    container_name: medical-mysql
+    hostname: medical-mysql
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-Everl^sting1}
+      MYSQL_DATABASE: sparcs_discharge_2021
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --max_allowed_packet=512M
+      - --innodb_buffer_pool_size=1G
+    volumes:
+      - medical-mysql-data:/var/lib/mysql
+      # 首次初始化：自动按文件名顺序执行 *.sql / *.sql.gz
+      - ./mysql-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+
+  # ---- HDFS 数据底座（单机伪分布式：NameNode + DataNode 同容器）----
+  medical-hdfs:
+    build: ./hdfs
+    image: medical-hdfs:3.5.0
+    container_name: medical-hdfs
+    hostname: namenode
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8020:8020"    # NameNode RPC（Spark hdfs:// 协议）
+      - "127.0.0.1:9870:9870"    # NameNode Web UI
+      - "127.0.0.1:9864:9864"    # DataNode HTTP
+      - "127.0.0.1:9866:9866"    # DataNode 数据传输（Spark 读块必经）
+    environment:
+      HDFS_REPLICATION: "1"
+      TZ: Asia/Shanghai
+    volumes:
+      - medical-hdfs-namenode:/data/namenode
+      - medical-hdfs-datanode:/data/datanode
+    healthcheck:
+      test: ["CMD-SHELL", "hdfs dfsadmin -safemode get | grep -q 'Safe mode is OFF'"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 40s
+
+  # ---- Redis 结果缓存（沿用既有容器约定）----
+  medical-redis:
+    image: redis:7-alpine
+    container_name: medical-redis
+    hostname: medical-redis
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"
+    command: ["redis-server", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  medical-mysql-data:
+  medical-hdfs-namenode:
+  medical-hdfs-datanode:

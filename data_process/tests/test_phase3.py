@@ -19,7 +19,6 @@ from app.core.exceptions import ServiceUnavailableError
 from app.data.data_provider import (
     HDFSDataProvider,
     MySQLDataProvider,
-    SparkDataProvider,
     build_data_provider,
 )
 from config.settings import testing_settings
@@ -111,8 +110,9 @@ def test_redis_cache_delete_and_clear(fake_redis_module):
 # ---------------------------------------------------------------------------
 # 数据提供者工厂
 # ---------------------------------------------------------------------------
-def test_build_provider_default_csv(tmp_path):
-    assert isinstance(build_data_provider(_settings(tmp_path)), SparkDataProvider)
+def test_build_provider_default_mysql(tmp_path):
+    """未显式指定 data_source 时默认使用 MySQL 数据底座。"""
+    assert isinstance(build_data_provider(_settings(tmp_path)), MySQLDataProvider)
 
 
 def test_build_provider_mysql(tmp_path):

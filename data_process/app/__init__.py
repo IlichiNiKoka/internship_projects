@@ -3,7 +3,7 @@
 
 依赖注入设计：
   create_app(settings, data_provider) 允许测试注入小数据集替身，
-  生产环境不传参时自动构建 SparkDataProvider。
+  生产环境不传参时自动构建 MySQLDataProvider（Docker 数据底座）。
 """
 
 from __future__ import annotations

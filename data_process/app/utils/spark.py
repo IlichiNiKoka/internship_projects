@@ -286,6 +286,10 @@ def build_spark_session(settings: Settings) -> SparkSession:
                 "true" if _pyarrow_available() else "false")
         .config("spark.sql.execution.arrow.pyspark.fallback.enabled", "true")
         .config("spark.sql.session.timeZone", "UTC")
+        # HDFS 容器化：DataNode 在容器内网注册，客户端必须改用其上报的
+        # hostname（localhost，配合宿主机端口映射）连接数据块，
+        # 否则拿到 172.x 容器 IP 直接超时（见 deploy/docker-compose.yml）
+        .config("spark.hadoop.dfs.client.use.datanode.hostname", "true")
         # 本地模式关闭 UI 端口冲突告警，允许多进程测试
         .config("spark.ui.enabled", "true" if settings.env != "testing" else "false")
     )
