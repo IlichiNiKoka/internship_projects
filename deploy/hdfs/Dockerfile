@@ -12,7 +12,9 @@ COPY hdfs-site.xml  /opt/hadoop/etc/hadoop/hdfs-site.xml
 COPY entrypoint.sh  /entrypoint.sh
 # 基础镜像默认以非 root 用户 hadoop 运行，切回 root 以初始化目录
 USER root
-RUN chmod +x /entrypoint.sh && mkdir -p /data/namenode /data/datanode
+# 构建期兜底：剥离 Windows 检出可能带入的 CR，避免 "bash\r" 启动失败
+RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh \
+ && mkdir -p /data/namenode /data/datanode
 
 EXPOSE 8020 9870 9864 9866
 

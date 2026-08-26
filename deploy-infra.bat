@@ -9,9 +9,11 @@ rem    2. Put your MySQL data file at PROJECT ROOT:
 rem         sparcs_discharge_2021.ibd      (InnoDB tablespace)
 rem    3. Double-click this file (or run from cmd)
 rem
-rem  The script is idempotent:
+rem  The script is idempotent AND self-healing:
 rem    - starts containers defined in deploy/docker-compose.yml
-rem    - imports sparcs_discharge_2021.ibd into MySQL on FIRST run
+rem    - import decision is based on ROW COUNT of the data table
+rem      (NOT on table existence), so a previously interrupted /
+rem      failed .ibd import is automatically retried next run
 rem    - uploads local Parquet snapshot to HDFS if present
 rem    - skips every step that was already done before
 rem ============================================================
@@ -21,6 +23,7 @@ set "COMPOSE_DIR=%PROJECT_ROOT%deploy"
 set "SQL_DIR=%COMPOSE_DIR%\sql"
 set "IBD_FILE=%PROJECT_ROOT%sparcs_discharge_2021.ibd"
 set "PARQUET_DIR=%PROJECT_ROOT%data_process\processed\sparcs_snapshot.parquet"
+set "TMP_OUT=%TEMP%\medsql.out"
 
 echo ============================================================
 echo  Medical Platform - Docker Infrastructure Deployment
@@ -55,35 +58,58 @@ if not "%HEALTHY%"=="1" (
   goto :pop
 )
 
-rem ---- 2. Import .ibd data file (first run only) ----
+rem Fetch root password once (avoids fragile multi-layer quoting of $VAR)
+call :load_dbpw
+if not defined DBPW (
+  echo [FAIL] Cannot read MYSQL_ROOT_PASSWORD from container environment.
+  echo        Check: docker inspect medical-mysql --format "{{.Config.Env}}"
+  goto :pop
+)
+
+rem ---- 2. Import .ibd data file (row-count based, self-healing) ----
 echo [2/5] Checking MySQL data...
-set "ROWCNT="
-docker exec -i medical-mysql sh -c "mysql -uroot -p\"\$MYSQL_ROOT_PASSWORD\" --skip-column-names 2>/dev/null" < "%SQL_DIR%\check_tables.sql" > "%TEMP%\medcnt.txt"
-set /p ROWCNT=<"%TEMP%\medcnt.txt"
-set "ROWCNT=%ROWCNT: =%"
-if "%ROWCNT%"=="" set "ROWCNT=0"
+
+rem 2a. Count tables: 0 = fresh volume, N = schema exists (maybe broken)
+call :mysql_scalar "%SQL_DIR%\check_tables.sql" TABCNT
+if "%TABCNT%"=="ERR" (
+  echo [FAIL] Cannot query MySQL ^(wrong credentials?^). Check: docker logs medical-mysql
+  goto :pop
+)
+if "%TABCNT%"=="" set "TABCNT=0"
+
+set "ROWCNT=0"
+set "NEED_IMPORT=0"
+
+if "%TABCNT%"=="0" (
+  echo        Schema not found - full import needed.
+  set "NEED_IMPORT=1"
+)
+
+rem 2b. Schema exists: decide by actual row count, not by table presence
+if not "%TABCNT%"=="0" call :decide_by_rows
+
+rem 2c. Nothing to do -> skip ahead
+if "%NEED_IMPORT%"=="0" (
+  echo [OK]   Database already contains %ROWCNT% rows - skipping .ibd import.
+  goto :hdfs
+)
 
 if not exist "%IBD_FILE%" (
-  echo [WARN] Data file not found: %IBD_FILE%
+  echo [WARN] Database is empty but data file not found: %IBD_FILE%
   echo        Place "sparcs_discharge_2021.ibd" at project root and re-run,
   echo        or load data yourself via: python load_to_db.py
   goto :hdfs
 )
 
-if not "%ROWCNT%"=="0" (
-  echo [OK]   Database already initialized - skipping .ibd import.
-  goto :hdfs
-)
-
 echo        Creating schema from deploy\schema_sparcs.sql ...
-docker exec -i medical-mysql sh -c "mysql -uroot -p\"\$MYSQL_ROOT_PASSWORD\" 2>/dev/null" < "%COMPOSE_DIR%\schema_sparcs.sql"
+docker exec -i medical-mysql sh -c "mysql -uroot -p'%DBPW%' 2>/dev/null" < "%COMPOSE_DIR%\schema_sparcs.sql"
 if errorlevel 1 (
   echo [FAIL] Schema creation failed.
   goto :pop
 )
 
 echo        Detaching empty tablespace...
-docker exec -i medical-mysql sh -c "mysql -uroot -p\"\$MYSQL_ROOT_PASSWORD\" 2>/dev/null" < "%SQL_DIR%\discard_tablespace.sql"
+docker exec -i medical-mysql sh -c "mysql -uroot -p'%DBPW%' 2>/dev/null" < "%SQL_DIR%\discard_tablespace.sql"
 if errorlevel 1 (
   echo [FAIL] DISCARD TABLESPACE failed.
   goto :pop
@@ -98,23 +124,26 @@ if errorlevel 1 (
 docker exec medical-mysql sh -c "chown mysql:mysql /var/lib/mysql/sparcs_discharge_2021/sparcs_discharge_2021.ibd && chmod 640 /var/lib/mysql/sparcs_discharge_2021/sparcs_discharge_2021.ibd"
 
 echo        Importing tablespace...
-docker exec -i medical-mysql sh -c "mysql -uroot -p\"\$MYSQL_ROOT_PASSWORD\" 2>/dev/null" < "%SQL_DIR%\import_tablespace.sql"
+docker exec -i medical-mysql sh -c "mysql -uroot -p'%DBPW%' 2>/dev/null" < "%SQL_DIR%\import_tablespace.sql"
 if errorlevel 1 (
   echo [FAIL] IMPORT TABLESPACE failed. A MySQL version mismatch is the usual cause.
   goto :pop
 )
 
-set "FINALCNT="
-docker exec -i medical-mysql sh -c "mysql -uroot -p\"\$MYSQL_ROOT_PASSWORD\" --skip-column-names 2>/dev/null" < "%SQL_DIR%\count_rows.sql" > "%TEMP%\medcnt.txt"
-set /p FINALCNT=<"%TEMP%\medcnt.txt"
+call :mysql_scalar "%SQL_DIR%\count_rows.sql" FINALCNT
+if "%FINALCNT%"=="ERR" set "FINALCNT=?"
+if "%FINALCNT%"=="" set "FINALCNT=0"
 echo [OK]   Data import done, row count = %FINALCNT%
+if "%FINALCNT%"=="0" echo [WARN] Imported table reports 0 rows - .ibd may come from a different MySQL version.
 
 :hdfs
 rem ---- 3. Build & start HDFS + Redis ----
 echo [3/5] Building/starting HDFS + Redis containers...
 docker compose up -d --build medical-hdfs medical-redis
 if errorlevel 1 (
-  echo [FAIL] Failed to start medical-hdfs / medical-redis.
+  echo [FAIL] Failed to build/start medical-hdfs / medical-redis.
+  echo        Common causes: base image pull blocked by proxy/network.
+  echo        Retry build alone:  cd deploy ^&^& docker compose build medical-hdfs
   goto :pop
 )
 call :wait_healthy medical-hdfs 300
@@ -176,6 +205,46 @@ popd
 :end
 pause
 exit /b 0
+
+rem ------------------------------------------------------------
+rem Helper: run a SQL file, fetch its single scalar result
+rem   %1 = sql file, %2 = output variable name
+rem   Sets %2 to: number | empty (query returned nothing) | ERR
+rem ------------------------------------------------------------
+:mysql_scalar
+set "%~2="
+set "MSCALAR="
+docker exec -i medical-mysql sh -c "mysql -uroot -p'%DBPW%' --skip-column-names 2>/dev/null" < "%~1" > "%TMP_OUT%" 2>nul
+if errorlevel 1 (
+  set "%~2=ERR"
+  goto :eof
+)
+for /f "usebackq delims=" %%v in ("%TMP_OUT%") do if not defined MSCALAR set "MSCALAR=%%v"
+if not defined MSCALAR goto :eof
+set "%~2=%MSCALAR: =%"
+goto :eof
+
+rem ------------------------------------------------------------
+rem Helper: read root password from container env into DBPW
+rem ------------------------------------------------------------
+:load_dbpw
+set "DBPW="
+for /f "usebackq delims=" %%p in (`docker exec medical-mysql printenv MYSQL_ROOT_PASSWORD 2^>nul`) do set "DBPW=%%p"
+goto :eof
+
+rem ------------------------------------------------------------
+rem Helper: schema exists -> check row count, flag repair needed
+rem ------------------------------------------------------------
+:decide_by_rows
+call :mysql_scalar "%SQL_DIR%\count_rows.sql" ROWCNT
+if "%ROWCNT%"=="ERR" set "ROWCNT=0"
+if "%ROWCNT%"=="" set "ROWCNT=0"
+echo        Found %TABCNT% table^(s^), %ROWCNT% row(s) in sparcs_discharge_2021.
+if "%ROWCNT%"=="0" (
+  echo        Table exists but is empty - previous import failed/incomplete, rebuilding...
+  set "NEED_IMPORT=1"
+)
+goto :eof
 
 rem ------------------------------------------------------------
 rem Helper: wait until container reports healthy
