@@ -140,7 +140,13 @@ onMounted(async () => {
         <p>{{ store.error }}</p>
       </section>
 
-      <RouterView v-else />
+      <RouterView v-else v-slot="{ Component }">
+        <!-- KeepAlive：切换路由（总览/大屏/对话）时保留组件状态，
+             对话历史与洞察报告不再因切界面丢失 -->
+        <KeepAlive>
+          <component :is="Component" />
+        </KeepAlive>
+      </RouterView>
     </main>
   </div>
 </template>

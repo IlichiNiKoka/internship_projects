@@ -6,6 +6,7 @@ from __future__ import annotations
 import copy
 from typing import Any
 
+from app.ai.summary.hallucination import check as check_numeric_consistency
 from app.application.models import AnalysisRecord, new_id, utc_now
 
 
@@ -173,15 +174,32 @@ class MedicalReportService:
             summary_data = self._summary_data(record)
             summary = self._generate_summary(record, summary_data)
             hallucination = summary.get("hallucination") or {}
-            # 缺少校验信息必须视为不可信，医疗报告采用 fail-closed。
-            trusted = self._is_trusted_summary(summary)
             narrative = str(summary.get("text") or "")
+
+            # 数字一致性校验（需求 2.3）：本地确定性比对摘要文本中的数字与
+            # 结构化分析结果，零额外 LLM 往返；不一致的摘要不纳入报告结论。
+            consistency = check_numeric_consistency(summary_data, narrative)
+            hallucination = {
+                **(hallucination if isinstance(hallucination, dict) else {}),
+                **consistency.to_dict(),
+            }
+
+            # 缺少校验信息必须视为不可信，医疗报告采用 fail-closed。
+            trusted = self._is_trusted_summary(summary) and consistency.passed
             if not trusted:
                 narrative = "该项自动摘要未通过数据一致性校验，请以本节结构化数据为准。"
+                if not consistency.passed:
+                    # 数字不一致：给出未匹配数字明细，便于前端/运维定位
+                    detail = (
+                        "自动摘要存在与结构化数据不一致的数字，已从报告结论排除"
+                        f"（未匹配数字：{consistency.unmatched[:5]}）"
+                    )
+                else:
+                    detail = "自动摘要未纳入报告结论"
                 warnings.append({
                     "code": "UNTRUSTED_SUMMARY",
                     "analysis_id": record.id,
-                    "message": "自动摘要未纳入报告结论",
+                    "message": detail,
                 })
             elif summary.get("fell_back_to_mock"):
                 warnings.append({
@@ -287,9 +305,10 @@ class MedicalReportService:
 
     @staticmethod
     def _is_trusted_summary(summary: Any) -> bool:
-        """可信判定：有非空正文且非空源即可纳入报告。
+        """可信判定：有非空正文、非空源且显式失败标记未触发。
 
-        幻觉后置校验已移除（改用内置提示词约束），不再依赖 hallucination.passed。
+        数字一致性由 generate() 内的 check_numeric_consistency 单独把关；
+        此处仅做基础门槛判断（生成服务异常等显式失败仍 fail-closed）。
         """
         if not isinstance(summary, dict):
             return False
@@ -304,8 +323,13 @@ class MedicalReportService:
 
     @staticmethod
     def _summary_data(record: AnalysisRecord) -> Any:
+        """取摘要用扁平事实；兼容旧快照：无 summary_data/data 时回退到整个结果。"""
         if isinstance(record.result, dict):
-            return record.result.get("summary_data", record.result.get("data"))
+            if "summary_data" in record.result:
+                return record.result["summary_data"]
+            if "data" in record.result:
+                return record.result["data"]
+            return record.result
         return record.result
 
     @staticmethod

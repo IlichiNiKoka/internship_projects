@@ -4,9 +4,12 @@
 from __future__ import annotations
 
 import copy
+import logging
 import re
 from dataclasses import dataclass, field
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from app.ai.intent.catalog import INTENT_BY_KEY
 from app.application.memory import (
@@ -358,6 +361,21 @@ class MedicalAssistantService:
                 metadata={"warnings": warnings, "agent_calls": agent_calls},
             )
             assembled = self._compact_result(primary if primary is not None else analysis_blob)
+            # Agent 路径补齐 summary_data：前端结构化渲染（表格/图表/KPI）、
+            # 洞察报告的摘要与数字一致性校验都依赖该字段；本地回退路径由
+            # ToolCallResult.assembled_result() 提供，此处对齐两条路径契约。
+            # 缺失会导致前端图表为空、报告层误判「空数据」而 fail-closed。
+            if isinstance(assembled, dict) and "summary_data" not in assembled:
+                try:
+                    from app.application.tools import normalize_for_summary
+                    assembled["summary_data"] = normalize_for_summary(
+                        intent_key, primary if primary is not None else analysis_blob,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Agent 分析结果 summary_data 适配失败 intent=%s", intent_key,
+                        exc_info=True,
+                    )
             record = AnalysisRecord(
                 id=new_id("ana"),
                 message_id=assistant.id,

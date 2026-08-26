@@ -170,8 +170,9 @@ class SummaryContractRegressionTests(unittest.TestCase):
             tool_name="medical_statistics",
             tool_input={},
             result={"summary_data": {"total_discharges": 10}},
+            # 注意：数字必须与源数据一致（报告层会做数字一致性校验）
             summary={
-                "text": "平台共有 999 条记录。",
+                "text": "平台共有 10 条记录。",
                 "llm_provider": "mock",
                 "empty_source": False,
                 "hallucination": {"passed": True},
@@ -182,7 +183,7 @@ class SummaryContractRegressionTests(unittest.TestCase):
         )
         section = report["sections"][0]
         self.assertTrue(section["summary_validation"]["trusted"])
-        self.assertIn("999", section["narrative"])
+        self.assertIn("10", section["narrative"])
         self.assertTrue(
             any(item["code"] == "SAVED_SUMMARY_REUSED" for item in report["warnings"])
         )

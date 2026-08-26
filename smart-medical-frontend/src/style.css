@@ -1594,3 +1594,74 @@ body.theme-dark-screen .screen-shell {
     max-width: 100%;
   }
 }
+
+/* ---------------- 医疗洞察报告（结构化 JSON 渲染） ---------------- */
+.chat-report-header {
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.chat-insight {
+  display: block;
+  overflow-y: auto;
+  gap: 0;
+}
+
+.chat-insight-summary {
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(79, 115, 217, 0.08);
+  border: 1px solid rgba(79, 115, 217, 0.18);
+  font-size: 13.5px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+.chat-insight-warnings {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.chat-insight-warnings .chat-msg-source {
+  color: #b45309;
+}
+
+.chat-insight-section {
+  padding: 12px 0;
+  border-top: 1px dashed rgba(100, 116, 139, 0.25);
+}
+
+.chat-insight-section h4 {
+  margin: 0 0 4px;
+  font-size: 15px;
+}
+
+.chat-insight-query {
+  margin: 0 0 8px;
+  font-size: 12px;
+  opacity: 0.65;
+}
+
+.chat-insight-narrative {
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+.chat-insight-narrative[data-trusted="false"] {
+  color: var(--danger, #ef4444);
+}
+
+.chat-insight .panel {
+  margin-top: 12px;
+}
+
+.chat-report-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}

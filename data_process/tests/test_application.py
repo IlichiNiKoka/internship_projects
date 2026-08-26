@@ -399,5 +399,153 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(report["provenance"][0]["tool"], "medical_statistics")
 
 
+class AgentPathContractTests(unittest.TestCase):
+    """Agent 模式（注入 AIService）的分析结果必须带 summary_data。
+
+    回归背景：Agent 路径曾缺失该字段，导致前端图表永远为空、
+    报告层误判「空数据」而将全部章节 fail-closed 判为不可信。
+    """
+
+    class _FakeAgentIntent:
+        def __init__(self):
+            self.intent = "freeform_query"
+            self.spec = None
+            self.params = {"dimensions": ["gender"], "metrics": ["discharge_count"]}
+
+        def to_dict(self):
+            return {"query": "q", "intent": self.intent, "confidence": 0.9,
+                    "params": {}, "matched_signals": {}}
+
+    class _FakeAgentSummary:
+        def __init__(self, text):
+            self._text = text
+
+        def to_dict(self):
+            return {"text": self._text, "llm_provider": "fake",
+                    "fell_back_to_mock": False, "empty_source": False,
+                    "hallucination": {"passed": True, "mode": "prompt_only"}}
+
+    class _FakeAgentService:
+        """模拟 AIService.execute：primary 为聚合原始结果（无 summary_data 键）。"""
+
+        def __init__(self, primary_payload):
+            self._primary = primary_payload
+
+        def execute(self, query, *, history=""):
+            return SimpleNamespace(
+                intent=AgentPathContractTests._FakeAgentIntent(),
+                analysis={
+                    "agent": True,
+                    "calls": [{"tool": "aggregation", "params": {},
+                               "explanation": "", "result": self._primary}],
+                    "primary": self._primary,
+                },
+                summary=AgentPathContractTests._FakeAgentSummary(
+                    "按性别统计：女性出院人次为 12,300 人。"
+                ),
+            )
+
+    def test_agent_chat_result_carries_summary_data_and_report_trusted(self):
+        client = FakeAnalysisClient()
+        registry = ToolRegistry.build_default(client, default_limit=20, max_limit=100)
+        executor = ToolExecutor(
+            registry,
+            RetryPolicy(max_attempts=1, base_delay_seconds=0, max_delay_seconds=0),
+            sleeper=lambda _: None,
+        )
+        generator = SummaryGenerator(MockClient())
+        store = InMemorySessionStore(ttl_seconds=60, max_sessions=10)
+        reports = MedicalReportService(generator, max_analyses=5)
+        agent_primary = {
+            "dimensions": [{"key": "gender", "column": "gender", "label": "性别"}],
+            "metrics": [{"key": "discharge_count", "label": "住院人次", "unit": "人次"}],
+            "rows": [{"gender": "Female", "discharge_count": 12300}],
+            "row_count": 1,
+        }
+        service = MedicalAssistantService(
+            intent_classifier=IntentClassifier(),
+            summary_generator=generator,
+            tool_executor=executor,
+            session_store=store,
+            report_service=reports,
+            ai_service=self._FakeAgentService(agent_primary),
+        )
+
+        result = service.chat("按性别统计住院人次")
+        assembled = (result.analysis or {}).get("result") or {}
+        summary_data = assembled.get("summary_data")
+        self.assertIsInstance(summary_data, dict)
+        self.assertEqual(summary_data.get("rows"), [{"gender": "Female", "discharge_count": 12300}])
+
+        # 用该记录生成报告：摘要与数字一致性校验都应通过
+        report = service.generate_report(result.session_id)
+        section = report["sections"][0]
+        self.assertTrue(section["summary_validation"]["trusted"])
+        self.assertNotEqual(
+            section["narrative"],
+            "该项自动摘要未通过数据一致性校验，请以本节结构化数据为准。",
+        )
+
+
+class _StaticSummaryGenerator:
+    """返回固定文本的摘要生成器替身（用于数字一致性校验测试）。"""
+
+    def __init__(self, text):
+        self._text = text
+
+    def generate(self, *, user_query, intent_label, intent_key, analysis_result):
+        return SimpleNamespace(to_dict=lambda: {
+            "text": self._text,
+            "llm_provider": "static",
+            "fell_back_to_mock": False,
+            "empty_source": False,
+            "hallucination": {"passed": True, "mode": "prompt_only"},
+        })
+
+
+class ReportNumericConsistencyTests(unittest.TestCase):
+    """需求：报告必须校验摘要中的数字一致性（fail-closed）。"""
+
+    @staticmethod
+    def _record(summary_data):
+        return AnalysisRecord(
+            id=new_id("ana"), message_id=new_id("msg"), query="按性别统计",
+            intent="aggregation_query", tool_name="aggregate",
+            tool_input={"dimensions": ["gender"]},
+            result={"data": {}, "summary_data": summary_data},
+            summary={}, attempts=1, elapsed_seconds=0.1,
+        )
+
+    def test_consistent_numbers_are_trusted(self):
+        data = {"rows": [{"gender": "Female", "discharge_count": 12300}], "row_count": 1}
+        service = MedicalReportService(_StaticSummaryGenerator(
+            "女性出院人次为 12,300 人，共 1 个分组。"
+        ))
+        report = service.generate(session_id="ses_x", analyses=[self._record(data)])
+        section = report["sections"][0]
+        self.assertTrue(section["summary_validation"]["trusted"])
+        self.assertTrue(section["summary_validation"]["hallucination"]["passed"])
+        self.assertEqual(report["validation"]["all_summaries_trusted"], True)
+        self.assertIn("12,300", report["executive_summary"])
+
+    def test_fabricated_numbers_are_excluded_from_report(self):
+        data = {"rows": [{"gender": "Female", "discharge_count": 12300}], "row_count": 1}
+        service = MedicalReportService(_StaticSummaryGenerator(
+            "女性出院人次为 45,678 人，占比 88.8%。"
+        ))
+        report = service.generate(session_id="ses_x", analyses=[self._record(data)])
+        section = report["sections"][0]
+        self.assertFalse(section["summary_validation"]["trusted"])
+        self.assertFalse(section["summary_validation"]["hallucination"]["passed"])
+        unmatched = section["summary_validation"]["hallucination"]["unmatched"]
+        self.assertTrue(any(abs(n - 45678) < 1 for n in unmatched))
+        codes = [w["code"] for w in report["warnings"]]
+        self.assertIn("UNTRUSTED_SUMMARY", codes)
+        self.assertFalse(report["validation"]["all_summaries_trusted"])
+        # 编造数字的摘要不得进入报告结论
+        self.assertNotIn("45,678", report["executive_summary"])
+        self.assertNotIn("45678", report["executive_summary"])
+
+
 if __name__ == "__main__":
     unittest.main()
