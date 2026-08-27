@@ -211,7 +211,8 @@ code {
 /* 窄态：文字完全隐藏（宽度为 0 不露出半个字），展开后淡入显示 */
 .brand-text,
 .nav-text,
-.status-text {
+.status-text,
+.llm-switch {
   min-width: 0;
   width: 0;
   overflow: hidden;
@@ -221,13 +222,78 @@ code {
 }
 .sidebar:hover .brand-text,
 .sidebar:hover .nav-text,
-.sidebar:hover .status-text {
+.sidebar:hover .status-text,
+.sidebar:hover .llm-switch {
   width: auto;
   opacity: 1;
 }
 .sidebar:hover .sidebar-status {
   justify-content: flex-start;
   gap: 10px;
+}
+
+/* ---- LLM 实时监测模式热切换开关 ---- */
+.llm-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.llm-switch:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.4);
+}
+.llm-switch:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+.llm-switch.is-busy {
+  cursor: wait;
+}
+.llm-switch-label {
+  color: rgba(255, 255, 255, 0.6);
+  transition: color 0.15s ease;
+}
+.llm-switch-label.is-active {
+  color: #34d399;
+  font-weight: 600;
+}
+.llm-switch-track {
+  position: relative;
+  width: 26px;
+  height: 14px;
+  border-radius: 999px;
+  background: #34d399;
+  transition: background 0.18s ease;
+}
+.llm-switch.is-local .llm-switch-track {
+  background: #f59e0b;
+}
+.llm-switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  transition: transform 0.18s ease;
+}
+.llm-switch.is-local .llm-switch-thumb {
+  transform: translateX(12px);
+}
+.sidebar-status.is-disabled .api-status-dot {
+  background: #f59e0b;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.8);
 }
 
 .panel,

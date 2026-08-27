@@ -606,6 +606,17 @@ class MedicalAssistantService:
         )
 
     # ------------------------------------------------------------------
+    # LLM 客户端热切换（provider.py 调用）：同步本服务的 _llm_client / _generator
+    # 以及内部 Agent 编排服务，保证在线/本地切换对聊天路径立即生效。
+    # ------------------------------------------------------------------
+    def rebind_client(self, client) -> None:
+        self._llm_client = client
+        if self._generator is not None:
+            self._generator._client = client
+        if self._ai_service is not None:
+            self._ai_service.rebind_client(client)
+
+    # ------------------------------------------------------------------
     # 会话与报告 API
     # ------------------------------------------------------------------
     def get_session(self, session_id: str, *, include_results: bool = False) -> dict[str, Any]:
@@ -848,157 +859,6 @@ class MedicalAssistantService:
         return default
 
     # ------------------------------------------------------------------
-    def _text_to_sql_db_cfg(self):
-        """懒加载 DB 连接配置（与 text_to_sql 模块解耦，失败返回 None）。"""
-        cache_key = "__db_cfg"
-        if hasattr(self, cache_key):
-            return getattr(self, cache_key)
-        try:
-            from app.ai.text_to_sql import DBConfig
-        except Exception:
-            return None
-        try:
-            from config.settings import Settings
-            stg = Settings.load()
-        except Exception:
-            # 构造器通常已经注入过 settings，但安全兜底
-            stg = None
-        if stg is None:
-            return None
-        host = str(getattr(stg, "db_host", "") or "")
-        port = int(getattr(stg, "db_port", 3306) or 3306)
-        user = str(getattr(stg, "db_user", "") or "")
-        password = str(getattr(stg, "db_password", "") or "")
-        db = str(getattr(stg, "db_name", "") or "")
-        table = str(getattr(stg, "db_table", "") or "")
-        if not (host and user and db and table):
-            return None
-        cfg = DBConfig(
-            host=host, port=port, user=user, password=password, db=db, table=table,
-        )
-        setattr(self, cache_key, cfg)
-        return cfg
-
-    # ------------------------------------------------------------------
-    def _run_text_to_sql(self, query: str):
-        """统一封装 text_to_sql：失败/不可用均返回 None。"""
-        client = self._llm_client
-        if client is None:
-            return None
-        cfg = self._text_to_sql_db_cfg()
-        if cfg is None:
-            return None
-        try:
-            from app.ai.text_to_sql import run_text_to_sql
-            return run_text_to_sql(
-                query=query, llm_client=client, db_config=cfg,
-                max_rows=5000, timeout_seconds=60,
-            )
-        except Exception as exc:
-            import logging as _logging
-            _logging.getLogger(__name__).warning(
-                "text_to_sql 运行异常: %s", exc, exc_info=False,
-            )
-            return None
-
-    # ------------------------------------------------------------------
-    def _try_text_to_sql_fallback(
-        self,
-        query: str,
-        session,
-        user_message,
-        *,
-        referenced=None,
-        context_applied: bool = False,
-        _intent_key_override: str | None = None,
-    ):
-        """在 unsupported / 工具调用失败后，尝试 text_to_sql 兜底生成完整分析结果。
-
-        返回 (ChatResult,) 表示成功；None 表示需要继续走其他路径。
-        """
-        result = self._run_text_to_sql(query)
-        if result is None or not result.success:
-            return None
-        # 成功 -> 包装成 ToolCallResult 风格 -> 走正常 generate + 记录 AnalysisRecord 流程
-        import datetime as _dt
-        from app.application.tools import ToolCallResult
-
-        analysis_dict = result.to_analysis_result()
-        intent_key = _intent_key_override or "freeform_query"
-        intent_spec = INTENT_BY_KEY.get(intent_key) or INTENT_BY_KEY["freeform_query"]
-        intent_label = getattr(intent_spec, "label_cn", intent_key)
-        tool_result = ToolCallResult(
-            intent=intent_key,
-            tool_name="text_to_sql_fallback",
-            params={"generated_sql": result.generated_sql,
-                    "sql_explanation": result.sql_explanation},
-            raw_result=analysis_dict,
-            summary_data=analysis_dict,
-            attempts=1,
-            elapsed_seconds=float(result.elapsed_seconds),
-            called_at=_dt.datetime.utcnow().isoformat() + "Z",
-        )
-        # 按正常路径生成摘要、记录分析
-        summary = self._generator.generate(
-            user_query=query,
-            intent_label=intent_label,
-            intent_key=intent_key,
-            analysis_result=tool_result.summary_data,
-        )
-        summary_dict = summary.to_dict() if hasattr(summary, "to_dict") else dict(summary)
-        warnings: list[dict[str, Any]] = []
-        answer = str(summary_dict.get("text") or "分析已完成。")
-        if summary_dict.get("fell_back_to_mock"):
-            warnings.append({
-                "code": "LLM_FALLBACK",
-                "message": "本次使用确定性模板生成摘要",
-            })
-        assistant = self._append_assistant(
-            session, answer, user_message.id,
-            intent=intent_key, status="completed",
-            metadata={"warnings": warnings, "text_to_sql": True},
-        )
-        from app.application.models import AnalysisRecord, new_id
-
-        assembled = self._compact_result(tool_result.assembled_result())
-        record = AnalysisRecord(
-            id=new_id("ana"),
-            message_id=assistant.id,
-            query=query,
-            intent=intent_key,
-            tool_name="text_to_sql_fallback",
-            tool_input=copy.deepcopy(tool_result.params),
-            result=assembled,
-            summary=summary_dict,
-            attempts=1,
-            elapsed_seconds=tool_result.elapsed_seconds,
-        )
-        assistant.analysis_id = record.id
-        session.analyses.append(record)
-
-        intent_payload = self._intent_payload_manual(
-            intent_key, intent_label, params=tool_result.params,
-            inherited=context_applied,
-        )
-        ctx = self._context_payload(referenced, context_applied)
-        self._record_idempotent_response(
-            user_message, status="completed",
-            intent=intent_payload, warnings=warnings, context=ctx,
-        )
-        self._save(session)
-        return (ChatResult(
-            session_id=session.id,
-            status="completed",
-            user_message=user_message.to_dict(),
-            assistant_message=assistant.to_dict(),
-            intent=intent_payload,
-            analysis=record.to_dict(),
-            context=ctx,
-            warnings=warnings,
-            history_size=len(session.messages),
-        ),)
-
-    # ------------------------------------------------------------------
     def _memory_variables_for_agent(self, session, referenced) -> str:
         """把多轮对话记忆压缩为 Agent（单轮 LLM 规划）能消费的一段纯文本。
 
@@ -1026,25 +886,6 @@ class MedicalAssistantService:
         if referenced is not None:
             parts.append(f"【被引用的分析ID】{referenced.id}（intent={referenced.intent}）")
         return "\n\n".join(parts)[:3000]
-
-    # ------------------------------------------------------------------
-    def _intent_payload_manual(self, intent_key, intent_label, *, params, inherited):
-        """text_to_sql fallback 成功时手动构造标准 intent_payload 结构。"""
-        spec = INTENT_BY_KEY.get(intent_key)
-        downstream = getattr(spec, "downstream", "aggregation") if spec else "aggregation"
-        downstream_target = getattr(spec, "target", None) if spec else None
-        return {
-            "query": "",
-            "intent": intent_key,
-            "intent_label": intent_label,
-            "confidence": 0.9,
-            "params": copy.deepcopy(params or {}),
-            "missing_required": [],
-            "downstream": downstream,
-            "downstream_target": downstream_target,
-            "matched_signals": {"text_to_sql_fallback": ["fallback"]},
-            "context_inherited": bool(inherited),
-        }
 
     # ------------------------------------------------------------------
     def _clarification(

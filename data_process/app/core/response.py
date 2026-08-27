@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import time
 import uuid
+from datetime import date, datetime
+from decimal import Decimal
 
 from flask import Response, g, has_app_context, has_request_context
 from flask.json import dumps
@@ -53,9 +55,40 @@ def build(code: ErrorCode | int, message: str, data=None,
     }
 
 
+def _json_safe(value):
+    """递归把非 JSON 原生类型转换为可序列化结构。
+
+    数据管线中算法结果可能携带 set/frozenset/Decimal/datetime/bytes
+    等类型（例如 readmission_risk 的 scoring_rules 曾携带 set 导致
+    500），统一在此兜底转换，避免业务层偶发不可序列化对象演变成 500。
+    未知对象保持原样，让真实问题仍然可见。
+    """
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, (set, frozenset)):
+        try:
+            return sorted(_json_safe(item) for item in value)
+        except TypeError:  # 混合类型不可排序时保序转换
+            return [_json_safe(item) for item in value]
+    if isinstance(value, bool) or value is None:
+        return value
+    if isinstance(value, (int, float, str)):
+        return value
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
 def _json_response(body: dict, status: int):
     """构造 JSON 响应：有应用上下文用 jsonify（响应头处理一致），
     无上下文（单元测试直调 helper）时直接构造 Response，保证可测试性。"""
+    body = _json_safe(body)
     if has_app_context():
         from flask import jsonify
         return jsonify(body), status

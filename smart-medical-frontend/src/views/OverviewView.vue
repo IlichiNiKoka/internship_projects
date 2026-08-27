@@ -5,6 +5,7 @@ import { computed, ref, watch } from 'vue'
 import ChartCard from '../components/ChartCard.vue'
 import KpiCard from '../components/KpiCard.vue'
 import { useDashboardStore } from '../store/dashboard'
+import { diseaseNameCn } from '../utils/diseaseNames'
 
 const store = useDashboardStore()
 const payload = computed(() => store.payload)
@@ -101,7 +102,8 @@ const diagnosisOption = computed<EChartsOption>(() => ({
   yAxis: {
     type: 'category',
     inverse: true,
-    data: (dashboard.value?.topDiagnoses.slice(0, 6) ?? []).map((item) => item.name),
+    // 重点病种名称本地化为中文显示
+    data: (dashboard.value?.topDiagnoses.slice(0, 6) ?? []).map((item) => diseaseNameCn(item.name)),
     axisLabel: { color: '#6b7280' },
   },
   series: [

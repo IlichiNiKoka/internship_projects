@@ -36,7 +36,7 @@ _SCORE_RULES: list[dict] = [
      "map": {"Extreme": 15, "Major": 10}},
     {"name": "住院超10天", "field": "length_of_stay", "threshold": 10, "points": 10},
     {"name": "非居家出院", "field": "patient_disposition",
-     "exclude": {"Home or Self Care"}, "points": 5},
+     "exclude": ["Home or Self Care"], "points": 5},
 ]
 
 # 等级阈值

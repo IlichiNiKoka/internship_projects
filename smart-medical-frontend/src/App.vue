@@ -31,12 +31,27 @@ const routeItems = computed(() =>
 
 const currentTitle = computed(() => String(route.meta.title ?? '平台总览'))
 
+// LLM 实时监测模式：左下角状态栏文案与热切换开关
+const statusTitle = computed(() => {
+  if (store.apiAvailable !== true) {
+    return '当前为静态演示模式（未连接后端）'
+  }
+  const llm = store.llmMode === 'local' ? '本地模型' : '在线API'
+  return `实时监测模式（${llm}），点击开关可在在线API / 本地模型间热切换`
+})
+
+async function toggleLlmMode() {
+  await store.switchLlmMode()
+}
+
 onMounted(async () => {
   await store.init()
   // 探测后端在线分析服务并同步元数据（维度/指标/算法），
   // 使大屏等页面进入“在线 API 模式”
   await store.pingApi()
   await store.loadApiMeta()
+  // 同步当前 LLM 实时监测模式（在线API / 本地模型）
+  await store.fetchLlmMode()
 })
 </script>
 
@@ -118,10 +133,24 @@ onMounted(async () => {
 
       <div
         class="sidebar-status"
-        :title="store.apiAvailable === true ? '当前为在线 API 实时分析模式' : '当前为静态演示模式（未连接后端）'"
+        :class="{ 'is-disabled': store.apiAvailable !== true }"
+        :title="statusTitle"
       >
         <span class="api-status-dot" :class="store.apiAvailable === true ? 'is-online' : 'is-offline'"></span>
-        <span class="status-text">{{ store.apiAvailable === true ? '在线 API 模式' : '静态演示模式' }}</span>
+        <span class="status-text">实时监测模式</span>
+        <button
+          class="llm-switch"
+          :class="{ 'is-local': store.llmMode === 'local', 'is-busy': store.llmSwitching }"
+          :disabled="store.apiAvailable !== true || store.llmMode === null"
+          type="button"
+          @click="toggleLlmMode"
+        >
+          <span class="llm-switch-label" :class="{ 'is-active': store.llmMode === 'online' }">在线API</span>
+          <span class="llm-switch-track">
+            <span class="llm-switch-thumb"></span>
+          </span>
+          <span class="llm-switch-label" :class="{ 'is-active': store.llmMode === 'local' }">本地模型</span>
+        </button>
       </div>
     </aside>
 

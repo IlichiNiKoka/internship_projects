@@ -230,6 +230,193 @@ class AggregationService:
         return result
 
     # ------------------------------------------------------------------
+    # 批量聚合（大屏筛选联动优化）：一次请求内共享同一份过滤结果
+    # ------------------------------------------------------------------
+    def run_batch(self, filters: list[dict], queries: list[dict], use_cache: bool = True) -> dict:
+        """批量执行多个分组聚合，批次内共享同一组过滤条件。
+
+        与逐个调用 run() 相比（前端大屏“应用筛选”一次发 10 个查询）：
+          * 过滤条件只应用一次，过滤后的 DataFrame 以 Spark cache 物化，
+            首个子查询触发的扫描+过滤结果被其余子查询复用，
+            避免 N 次全表扫描与 N 次重复过滤（本地 200 万行收益明显）；
+          * 一次 HTTP 往返替代 N 次，降低网络开销与连接建立成本；
+          * 整个批次写一份缓存，命中后零 Spark 作业。
+
+        filters: list[dict]  批次级共享过滤条件（结构与 run() 的 filters 一致）
+        queries: list[dict]  子查询列表，每项含 id/dimensions/metrics/sort/limit
+        """
+        # ---- 1. 白名单校验（批次级过滤一次，子查询逐个校验）----
+        normalized_filters = self._normalize_filters(filters or [])
+        validated: list[dict] = []
+        seen_ids: set[str] = set()
+        for query in queries:
+            qid = str(query.get("id"))
+            if qid in seen_ids:
+                raise InvalidFilterError(detail={"id": qid}, message=f"批量查询 id 重复: {qid}")
+            seen_ids.add(qid)
+            validated.append(self._validate_batch_query(query))
+
+        # ---- 2. 缓存 + 同 key 并发去重（single-flight）----
+        cache_key = self._batch_cache_key(normalized_filters, validated)
+        if use_cache:
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                logger.info("批量聚合结果命中缓存: %s", cache_key)
+                cached["cached"] = True
+                return cached
+
+        flight_lock = _SINGLE_FLIGHT.acquire(cache_key)
+        try:
+            if use_cache:
+                cached = self._cache.get(cache_key)
+                if cached is not None:
+                    logger.info("批量聚合结果命中缓存(去重等待后): %s", cache_key)
+                    cached["cached"] = True
+                    return cached
+            return self._compute_batch_and_cache(
+                cache_key, normalized_filters, validated, use_cache)
+        finally:
+            flight_lock.release()
+
+    def _validate_batch_query(self, query: dict) -> dict:
+        """校验单个批量子查询：维度/指标白名单 + limit/sort，返回解析后的查询定义。"""
+        dim_keys = query.get("dimensions") or []
+        metric_keys = query.get("metrics") or []
+
+        if not dim_keys:
+            raise InvalidDimensionError(invalid=[], available=None)
+        if len(dim_keys) > self._max_dimensions:
+            raise InvalidDimensionError(invalid=dim_keys, available=None)
+        if not metric_keys:
+            raise InvalidMetricError(invalid=[])
+
+        dimensions, invalid = [], []
+        for key in dim_keys:
+            spec = resolve_dimension(key)
+            if spec is None:
+                invalid.append(key)
+            elif spec not in dimensions:
+                dimensions.append(spec)
+        if invalid:
+            raise InvalidDimensionError(invalid, available=[d.key for d in DIMENSIONS])
+
+        metrics, invalid_m = [], []
+        for key in metric_keys:
+            spec = resolve_metric(key)
+            if spec is None:
+                invalid_m.append(key)
+            elif spec not in metrics:
+                metrics.append(spec)
+        if invalid_m:
+            raise InvalidMetricError(invalid_m, available=[m.key for m in METRICS])
+
+        limit = query.get("limit") or self._default_limit
+        limit = max(1, min(int(limit), self._max_limit))
+        sort_specs = self._normalize_sort(query.get("sort") or [], metrics)
+        return {
+            "id": str(query["id"]),
+            "dimensions": dimensions,
+            "metrics": metrics,
+            "limit": limit,
+            "sort": sort_specs,
+        }
+
+    def _compute_batch_and_cache(self, cache_key: str, filters: list[dict],
+                                 queries: list[dict], use_cache: bool) -> dict:
+        """执行批次计算：过滤一次 -> 物化缓存 -> 逐子查询分组聚合 -> 整体写缓存。"""
+        start = time.perf_counter()
+        try:
+            df = self._dataframe()
+            filtered = self._apply_filters(df, filters)
+            # 有过滤条件且多于一个子查询时，缓存过滤结果供批次内复用；
+            # 无过滤条件时直接复用 provider 已缓存的全表，避免重复占内存。
+            base = filtered
+            if filters and len(queries) > 1:
+                base = filtered.cache()
+
+            def _compute_all() -> dict:
+                results: dict[str, dict] = {}
+                for q in queries:
+                    q_start = time.perf_counter()
+                    dimensions, metrics, limit = q["dimensions"], q["metrics"], q["limit"]
+                    grouped = base.groupBy(*[d.column for d in dimensions])
+                    agg_result = grouped.agg(*[m.agg_expr() for m in metrics])
+                    order_cols = [
+                        F.col(spec["field"]).desc() if spec["order"] == "desc"
+                        else F.col(spec["field"]).asc()
+                        for spec in q["sort"]
+                    ]
+                    ordered = agg_result.orderBy(*order_cols)
+                    raw_rows = [r.asDict(recursive=True) for r in ordered.limit(limit).collect()]
+                    rows = self._normalize_rows(raw_rows, metrics)
+                    results[q["id"]] = {
+                        "dimensions": [{"key": d.key, "column": d.column, "label": d.label_cn}
+                                       for d in dimensions],
+                        "metrics": [{"key": m.key, "label": m.label_cn, "unit": m.unit}
+                                    for m in metrics],
+                        "filters": filters,
+                        "sort": q["sort"],
+                        "rows": rows,
+                        "row_count": len(rows),
+                        "truncated": len(raw_rows) >= limit,
+                        "cached": False,
+                        "compute_seconds": round(time.perf_counter() - q_start, 3),
+                    }
+                return results
+
+            results = run_with_timeout(
+                _compute_all,
+                timeout_seconds=self._timeout_seconds,
+                task_name=f"批量聚合({len(queries)}个子查询)",
+            )
+        except ComputationTimeoutError:
+            raise   # 超时降级（504）由中间件统一响应
+        except Exception as exc:
+            logger.exception("批量聚合计算失败")
+            raise ComputationError(
+                message="Spark 批量聚合计算失败，请检查参数后重试",
+                detail={"error": str(exc)},
+            ) from exc
+
+        elapsed = round(time.perf_counter() - start, 3)
+
+        # ---- 慢查询日志与告警 ----
+        if self._slow_threshold > 0 and elapsed >= self._slow_threshold:
+            logger.warning(
+                "慢查询告警: 批量聚合耗时 %.3fs（阈值 %.1fs）cache_key=%s",
+                elapsed, self._slow_threshold, cache_key,
+            )
+
+        result = {
+            "results": results,
+            "query_count": len(queries),
+            "compute_seconds": elapsed,
+            "cached": False,
+        }
+        if use_cache:
+            self._cache.set(cache_key, dict(result))
+        return result
+
+    @staticmethod
+    def _batch_cache_key(filters: list[dict], queries: list[dict]) -> str:
+        """批次缓存键：过滤条件 + 全部子查询定义（id/dims/metrics/sort/limit）。"""
+        payload = json.dumps({
+            "f": filters,
+            "q": [
+                {
+                    "id": q["id"],
+                    "d": [d.column for d in q["dimensions"]],
+                    "m": [m.key for m in q["metrics"]],
+                    "s": q["sort"],
+                    "l": q["limit"],
+                }
+                for q in queries
+            ],
+        }, sort_keys=True, ensure_ascii=True)
+        digest = hashlib.sha1(payload.encode("utf-8")).hexdigest()[:32]
+        return f"aggb:{digest}"
+
+    # ------------------------------------------------------------------
     def _dataframe(self) -> DataFrame:
         if self._df is not None:
             return self._df

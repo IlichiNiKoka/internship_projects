@@ -4,11 +4,22 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 interface OptionItem {
   label: string
   value: string
+  /** 悬浮提示全文（如中文名 + 英文原文），缺省用 label */
+  title?: string
+}
+
+/** 二级菜单分组（大屏疾病选单：疾病大类 -> 具体疾病） */
+interface OptionGroup {
+  category: string
+  items: OptionItem[]
 }
 
 const props = withDefaults(
   defineProps<{
-    options: OptionItem[]
+    /** 扁平选项列表（无分组模式，如医院选单） */
+    options?: OptionItem[]
+    /** 二级分组选项（有分组时优先于 options，如疾病选单） */
+    groups?: OptionGroup[]
     modelValue: string[]
     placeholder?: string
     emptyText?: string
@@ -16,6 +27,8 @@ const props = withDefaults(
     allLabel?: string
   }>(),
   {
+    options: () => [],
+    groups: () => [],
     placeholder: '请选择',
     emptyText: '无匹配选项',
     allLabel: '全部',
@@ -28,23 +41,60 @@ const open = ref(false)
 const keyword = ref('')
 const rootRef = ref<HTMLDivElement | null>(null)
 
-// 选项按名称排序（不区分大小写），保证列表始终有序
+// 扁平化全量选项（分组模式下由 groups 展开，供检索与已选回显）
+const flatOptions = computed<OptionItem[]>(() => {
+  if (props.groups.length > 0) {
+    return props.groups.flatMap((g) => g.items)
+  }
+  return props.options
+})
+
+// 分组模式下各组的扁平选项，用于组内过滤
+const flatGroups = computed<OptionGroup[]>(() => {
+  if (props.groups.length > 0) {
+    return props.groups
+  }
+  return []
+})
+
+const keywordLower = computed(() => keyword.value.trim().toLowerCase())
+
+// 无分组：扁平选项按名称排序（不区分大小写），保证列表始终有序
 const sortedOptions = computed(() =>
   [...props.options].sort((a, b) => a.label.localeCompare(b.label, 'en', { sensitivity: 'base' })),
 )
 
+// 无分组：关键字过滤（同时匹配中文显示名与英文原值）
 const filteredOptions = computed(() => {
-  const kw = keyword.value.trim().toLowerCase()
+  const kw = keywordLower.value
   if (!kw) {
     return sortedOptions.value
   }
-  return sortedOptions.value.filter((o) => o.label.toLowerCase().includes(kw))
+  return sortedOptions.value.filter(
+    (o) => o.label.toLowerCase().includes(kw) || o.value.toLowerCase().includes(kw),
+  )
+})
+
+// 分组：过滤后保留非空组（组标题不参与过滤，仅匹配组内疾病名）
+const filteredGroups = computed<OptionGroup[]>(() => {
+  const kw = keywordLower.value
+  if (!kw) {
+    return flatGroups.value
+  }
+  return flatGroups.value
+    .map((g) => ({
+      category: g.category,
+      items: g.items.filter(
+        (o) => o.label.toLowerCase().includes(kw) || o.value.toLowerCase().includes(kw),
+      ),
+    }))
+    .filter((g) => g.items.length > 0)
 })
 
 const selectedSet = computed(() => new Set(props.modelValue))
 
 function labelOf(value: string): string {
-  return props.options.find((o) => o.value === value)?.label ?? value
+  return flatOptions.value.find((o) => o.value === value)?.label ?? value
 }
 
 function toggle(value: string) {
@@ -107,11 +157,29 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
           <span class="ss-item-label">{{ allLabel }}</span>
           <span v-if="modelValue.length > 0" class="ss-all-reset">点此恢复全部</span>
         </label>
-        <label v-for="opt in filteredOptions" :key="opt.value" class="ss-item">
-          <input type="checkbox" :checked="selectedSet.has(opt.value)" @change="toggle(opt.value)" />
-          <span class="ss-item-label" :title="opt.label">{{ opt.label }}</span>
-        </label>
-        <p v-if="filteredOptions.length === 0" class="ss-empty">{{ emptyText }}</p>
+        <!-- 二级菜单模式：大类分组标题 + 组内疾病 -->
+        <template v-if="groups.length > 0">
+          <div v-for="group in filteredGroups" :key="group.category" class="ss-group">
+            <div class="ss-group-head">
+              <span class="ss-group-title">{{ group.category }}</span>
+              <span class="ss-group-count">{{ group.items.length }}</span>
+            </div>
+            <label v-for="opt in group.items" :key="opt.value" class="ss-item ss-item--grouped">
+              <input type="checkbox" :checked="selectedSet.has(opt.value)" @change="toggle(opt.value)" />
+              <span class="ss-item-label" :title="opt.title ?? opt.label">{{ opt.label }}</span>
+            </label>
+          </div>
+        </template>
+        <!-- 扁平模式：直接平铺选项 -->
+        <template v-else>
+          <label v-for="opt in filteredOptions" :key="opt.value" class="ss-item">
+            <input type="checkbox" :checked="selectedSet.has(opt.value)" @change="toggle(opt.value)" />
+            <span class="ss-item-label" :title="opt.title ?? opt.label">{{ opt.label }}</span>
+          </label>
+        </template>
+        <p v-if="filteredOptions.length === 0 && filteredGroups.length === 0" class="ss-empty">
+          {{ emptyText }}
+        </p>
       </div>
     </div>
   </div>
@@ -240,7 +308,7 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
 
 /* 选项列表：右侧滚动条 */
 .ss-list {
-  max-height: 240px;
+  max-height: 320px;
   overflow-y: auto;
   padding: 4px;
 }
@@ -275,7 +343,7 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
 .ss-item--all {
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: 3;
   background: #0a1830;
   border-bottom: 1px solid rgba(114, 188, 255, 0.15);
   font-weight: 600;
@@ -310,5 +378,40 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
   text-align: center;
   font-size: 12.5px;
   color: rgba(226, 240, 255, 0.5);
+}
+
+/* 二级菜单：大类分组标题（吸顶 + 淡色底，滚动时保持可见） */
+.ss-group-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 8px;
+  margin: 4px 0 2px;
+  border-radius: 6px;
+  background: rgba(9, 26, 51, 0.98);
+  border-bottom: 1px solid rgba(114, 188, 255, 0.18);
+  cursor: default;
+}
+.ss-group-title {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #7dd3fc;
+  letter-spacing: 0.5px;
+}
+.ss-group-count {
+  flex: none;
+  font-size: 11px;
+  color: rgba(185, 216, 255, 0.6);
+  background: rgba(114, 188, 255, 0.12);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+.ss-item--grouped {
+  padding-left: 18px;
+  font-size: 12.5px;
 }
 </style>

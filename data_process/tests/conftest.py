@@ -32,8 +32,20 @@ from pyspark.sql import SparkSession
 from pyspark.sql.types import DoubleType, IntegerType
 
 from app import create_app
+from app.algorithms.base import register_builtin_algorithms
 from app.data.data_provider import MemoryDataProvider, SPARCS_SCHEMA
 from config.settings import testing_settings
+
+
+@pytest.fixture(autouse=True)
+def _register_algorithms():
+    """确保所有测试（含不经过 create_app 的）都能拿到内置算法注册表。
+
+    register_builtin_algorithms 幂等：import 全部算法模块触发 @register_algorithm，
+    重复调用只会重复 import（模块缓存）并重写相同键值。
+    """
+    register_builtin_algorithms()
+    yield
 
 N = 600  # 样本行数
 

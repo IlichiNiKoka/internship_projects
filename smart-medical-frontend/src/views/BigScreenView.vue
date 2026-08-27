@@ -9,6 +9,8 @@ import ChartCard from '../components/ChartCard.vue'
 import SearchSelect from '../components/SearchSelect.vue'
 import { useDashboardStore } from '../store/dashboard'
 import type { FilterState } from '../types/dashboard'
+import { diseaseNameCn } from '../utils/diseaseNames'
+import { groupDiseasesByCategory, mdcNameCn } from '../utils/diseaseCategories'
 
 // 注册纽约州及邻州背景地图（可视化进阶 · 全州医院分布）
 // ny-region.json = 纽约州 62 县（高精度）+ 周边邻州淡色轮廓，properties.region 区分主体/背景
@@ -118,39 +120,6 @@ const countyChoroSource = computed(() =>
 )
 // 主要诊断类别 MDC 排行（在线=筛选后聚合；离线=静态数据回退）
 const mdcSource = computed(() => screen.value?.mdcDistribution ?? dashboard.value?.mdcDistribution ?? [])
-
-// MDC 类别英文名 -> 中文名（源数据为英文，图表展示本地化为中文）
-const MDC_NAME_CN: Record<string, string> = {
-  'DISEASES AND DISORDERS OF THE CIRCULATORY SYSTEM': '循环系统疾病',
-  'PREGNANCY, CHILDBIRTH AND THE PUERPERIUM': '妊娠分娩与产褥期',
-  'DISEASES AND DISORDERS OF THE RESPIRATORY SYSTEM': '呼吸系统疾病',
-  'NEWBORNS AND OTHER NEONATES WITH CONDITIONS ORIGINATING IN THE PERINATAL PERIOD': '新生儿及围产期',
-  'DISEASES AND DISORDERS OF THE DIGESTIVE SYSTEM': '消化系统疾病',
-  'DISEASES AND DISORDERS OF THE MUSCULOSKELETAL SYSTEM AND CONNECTIVE TISSUE': '肌肉骨骼与结缔组织',
-  'INFECTIOUS AND PARASITIC DISEASES (SYSTEMIC OR UNSPECIFIED SITES)': '感染与寄生虫病',
-  'DISEASES AND DISORDERS OF THE NERVOUS SYSTEM': '神经系统疾病',
-  'DISEASES AND DISORDERS OF THE KIDNEY AND URINARY TRACT': '肾脏与泌尿系统疾病',
-  'MENTAL DISEASES AND DISORDERS': '精神疾病与障碍',
-  'ENDOCRINE, NUTRITIONAL AND METABOLIC DISEASES AND DISORDERS': '内分泌营养代谢疾病',
-  'DISEASES AND DISORDERS OF THE HEPATOBILIARY SYSTEM AND PANCREAS': '肝胆与胰腺疾病',
-  'ALCOHOL/DRUG USE AND ALCOHOL/DRUG INDUCED ORGANIC MENTAL DISORDERS': '酒精/药物所致精神障碍',
-  'DISEASES AND DISORDERS OF THE SKIN, SUBCUTANEOUS TISSUE AND BREAST': '皮肤皮下与乳腺疾病',
-  'DISEASES AND DISORDERS OF THE BLOOD AND BLOOD FORMING ORGANS AND IMMUNOLOGICAL DISORDERS': '血液与免疫系统疾病',
-  'INJURIES, POISONINGS AND TOXIC EFFECTS OF DRUGS': '损伤中毒与药物毒性',
-  'FACTORS INFLUENCING HEALTH STATUS AND OTHER CONTACTS WITH HEALTH SERVICES': '健康影响因素与医疗接触',
-  'MYELOPROLIFERATIVE DISEASES AND DISORDERS, AND POORLY DIFFERENTIATED NEOPLASM': '骨髓增殖与低分化肿瘤',
-  'DISEASES AND DISORDERS OF THE EAR, NOSE, MOUTH AND THROAT': '耳鼻咽喉口腔疾病',
-  'DISEASES AND DISORDERS OF THE FEMALE REPRODUCTIVE SYSTEM': '女性生殖系统疾病',
-  'DISEASES AND DISORDERS OF THE MALE REPRODUCTIVE SYSTEM': '男性生殖系统疾病',
-  'HUMAN IMMUNODEFICIENCY VIRUS INFECTIONS': '人类免疫缺陷病毒感染',
-  'MULTIPLE SIGNIFICANT TRAUMA': '多发性严重创伤',
-  'DISEASES AND DISORDERS OF THE EYE': '眼部疾病',
-  'PRE MDC': '术前预分诊',
-  'BURNS': '烧伤',
-}
-function mdcNameCn(name: string): string {
-  return MDC_NAME_CN[name] ?? name
-}
 
 // ---- 医院位置与简介（纽约都会区知名医院，坐标为近似值；用于地图点位展示）----
 const HOSPITAL_POINTS: Record<string, { lon: number; lat: number; intro: string }> = {
@@ -350,10 +319,10 @@ onUnmounted(() => {
   expandChart?.dispose()
 })
 
-// 疾病/医院筛选：使用 store 中加载的全量选项（在线 = 后端全量聚合，离线 = 静态 JSON），按名称排序
-const diseaseFilterOptions = computed(() =>
-  store.filterDiseases.map((d) => ({ label: d, value: d })),
-)
+// 疾病筛选：二级菜单（大类 -> 具体疾病）。
+// 使用 store 中加载的全量选项（在线 = 后端全量聚合，离线 = 静态 JSON）。
+// 疾病显示中文、value 保留英文原文（后端 in 过滤按原值匹配），悬浮可见英文原文。
+const diseaseFilterGroups = computed(() => groupDiseasesByCategory(store.filterDiseases))
 const ageOptions = computed(() => ['全部年龄', ...(dashboard.value?.ageDistribution.map((d) => d.name) ?? [])])
 
 // 医院全名可能很长（最长约 62 字符），下拉显示截断名称、保留全名作为筛选值，避免下拉框被撑得过宽
@@ -399,6 +368,9 @@ async function applyFilters() {
   screenLoading.value = true
   screenError.value = ''
 
+  // 筛选摘要中的疾病名显示中文，医院名保持原样
+  const diseaseSummary = fmtMulti(filters.disease.map(diseaseNameCn))
+
   try {
     if (store.apiAvailable) {
       await store.runScreenQuery({
@@ -413,14 +385,14 @@ async function applyFilters() {
       } else if (store.screenData) {
         const data = store.screenData
         appliedFilterSummary.value =
-          `疾病：${fmtMulti(filters.disease)} / 年龄：${filters.age} / 医院：${fmtMulti(filters.hospital)} / 年份：${filters.year}` +
+          `疾病：${diseaseSummary} / 年龄：${filters.age} / 医院：${fmtMulti(filters.hospital)} / 年份：${filters.year}` +
           ` · 后端实时聚合 ${data.dischargeCount.toLocaleString()} 条记录（${data.computedAt} 计算）`
         // 同步刷新可视化进阶图表（地图 / 3D）
         renderAdvancedCharts()
       }
     } else {
       appliedFilterSummary.value =
-        `疾病：${fmtMulti(filters.disease)} / 年龄：${filters.age} / 医院：${fmtMulti(filters.hospital)} / 年份：${filters.year}` +
+        `疾病：${diseaseSummary} / 年龄：${filters.age} / 医院：${fmtMulti(filters.hospital)} / 年份：${filters.year}` +
         '（未连接后端，当前展示静态汇总）'
     }
   } finally {
@@ -839,7 +811,7 @@ const severityOption = computed(buildSeverityOption)
         <span>疾病</span>
         <SearchSelect
           v-model="filters.disease"
-          :options="diseaseFilterOptions"
+          :groups="diseaseFilterGroups"
           placeholder="全部疾病"
           all-label="全部疾病"
           empty-text="无匹配疾病"

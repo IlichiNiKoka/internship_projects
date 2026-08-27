@@ -23,7 +23,7 @@ from typing import Any
 import pandas as pd
 from pyspark.ml import Pipeline, PipelineModel
 from pyspark.ml.evaluation import RegressionEvaluator
-from pyspark.ml.feature import StringIndexer, VectorAssembler
+from pyspark.ml.feature import StringIndexer, StringIndexerModel, VectorAssembler
 from pyspark.ml.regression import LinearRegression
 from pyspark.sql import DataFrame, functions as F
 
@@ -44,6 +44,15 @@ _CATEGORICAL_FEATURES = [
     ("medical_surgical", "apr_medical_surgical_description"),
 ]
 _LABEL = "total_charges"
+
+# 严重程度描述 -> code 映射（AI 路径/classifier 抽取的是 description 文本，
+# 而模型特征用 apr_severity_of_illness_code 数值，这里补齐转换）
+_SEVERITY_DESC_TO_CODE = {
+    "Minor": 1,
+    "Moderate": 2,
+    "Major": 3,
+    "Extreme": 4,
+}
 
 # 进程内模型缓存（参数哈希 -> PipelineModel），线程安全
 _MODEL_CACHE: dict[str, PipelineModel] = {}
@@ -205,15 +214,62 @@ class CostPredictionAlgorithm(Algorithm):
             with _MODEL_LOCK:
                 model = _MODEL_CACHE[digest]
 
+        # 训练好的 StringIndexer（顺序与 _CATEGORICAL_FEATURES 一致，位于 stages 头部）。
+        # indexer.labels 按训练频次降序：labels[0] 是训练众数类别；
+        # 预测时未见过的新值若直接交给 StringIndexer，会被编码为 numLabels
+        # （类别数）而非合法索引，乘以最后一个系数会产生离谱的伪贡献。
+        indexers: dict[str, StringIndexerModel] = {}
+        for (feat_name, _), stage in zip(_CATEGORICAL_FEATURES, model.stages):
+            if isinstance(stage, StringIndexerModel):
+                indexers[feat_name] = stage
+
+        def _categorical(feat_name: str, value: Any, fallback: str) -> str:
+            text = str(value or fallback).strip()
+            idx = indexers.get(feat_name)
+            if idx is not None and text not in idx.labels:
+                logger.warning(
+                    "cost_prediction 特征 %s=%r 不在训练类别中，用训练众数 %r 兜底",
+                    feat_name, text, idx.labels[0],
+                )
+                text = idx.labels[0]
+            return text
+
+        # severity：兼容 description（AI 路径抽取结果）与 code 两种字段；
+        # 描述文本（Minor/Moderate/Major/Extreme）映射为 1~4，其他非法值回退 1
+        sev_raw = sample.get("severity_code")
+        if sev_raw is None:
+            desc = str(sample.get("apr_severity_of_illness_description") or "")
+            sev_raw = _SEVERITY_DESC_TO_CODE.get(desc.strip(), 1)
+        try:
+            severity_code = int(sev_raw)
+        except (TypeError, ValueError):
+            severity_code = 1
+        severity_code = max(0, min(4, severity_code))
+
+        try:
+            los = int(sample.get("length_of_stay") or 1)
+        except (TypeError, ValueError):
+            los = 1
+        los = max(1, min(365, los))
+
         spark = ctx.dataframe.sparkSession
-        # 构造单行特征 DataFrame（缺失特征用均值/众数兜底，保证预测可执行）
+        # 构造单行特征 DataFrame（缺失特征用训练众数/均值兜底，保证预测可执行）
         row = {
-            "length_of_stay": int(sample.get("length_of_stay") or 1),
-            "apr_severity_of_illness_code": int(sample.get("severity_code") or 1),
-            "age_group": str(sample.get("age_group") or "Unknown"),
-            "type_of_admission": str(sample.get("admission_type") or "Unknown"),
-            "payment_typology_1": str(sample.get("payment_type") or "Unknown"),
-            "apr_medical_surgical_description": str(sample.get("medical_surgical") or "Unknown"),
+            "length_of_stay": los,
+            "apr_severity_of_illness_code": severity_code,
+            "age_group": _categorical("age_group", sample.get("age_group"), "Unknown"),
+            "type_of_admission": _categorical(
+                "admission_type",
+                sample.get("admission_type") or sample.get("type_of_admission"),
+                "Unknown"),
+            "payment_typology_1": _categorical(
+                "payment_type",
+                sample.get("payment_type") or sample.get("payment_typology_1"),
+                "Unknown"),
+            "apr_medical_surgical_description": _categorical(
+                "medical_surgical",
+                sample.get("medical_surgical") or sample.get("apr_medical_surgical_description"),
+                "Unknown"),
         }
         row_df = spark.createDataFrame(pd.DataFrame({
             "length_of_stay": pd.Series([row["length_of_stay"]], dtype="int64"),

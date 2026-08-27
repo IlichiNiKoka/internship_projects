@@ -5,7 +5,7 @@
   1. 取消本地"意图识别"前置步骤，输入直接交给 LLM 工具规划 Agent。
      LLM 全权决定调用 aggregation Spark 接口 / algorithm 算法 / metadata 元数据，
      或直接 grounded 文本回答。
-  2. 不再生成裸 SQL。之前的 text_to_sql 功能改为让 LLM 直接输出 Spark aggregation
+  2. 不再生成裸 SQL（text_to_sql 模块已移除）。LLM 直接输出 Spark aggregation
      的结构化参数（dimensions/metrics/filters/sort/limit），由本地调用 AggregationService，
      完全复用 Spark 的数据加载 cache、安全白名单、慢查询告警。
   3. 本地只负责：
@@ -99,6 +99,18 @@ class AIService:
             algorithm_service=self._algorithm,
             max_correct_loops=max_correct_loops,
         )
+
+    # ------------------------------------------------------------------
+    # LLM 客户端热切换（provider.py 调用）：重建 client 后同步更新
+    # 本服务的 _client / _generator / _agent，保证在线/本地切换立即生效。
+    # ------------------------------------------------------------------
+    def rebind_client(self, client: LLMClient) -> None:
+        """把 LLM 客户端绑定到本服务及其 Agent/生成器（热切换用）。"""
+        self._client = client
+        if self._generator is not None:
+            self._generator._client = client
+        if self._agent is not None:
+            self._agent._llm = client
 
     # ------------------------------------------------------------------
     # 1. 意图识别（单独暴露，保留用于 /api/v1/ai/intent 向后兼容）

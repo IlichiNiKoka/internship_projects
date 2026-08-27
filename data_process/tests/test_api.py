@@ -104,6 +104,70 @@ def test_aggregation_missing_body_400(client):
 
 
 # ---------------------------------------------------------------------------
+# 批量聚合接口（大屏筛选联动优化）
+# ---------------------------------------------------------------------------
+def test_aggregation_batch(client):
+    resp = _post(client, "/api/v1/aggregations/batch", {
+        "filters": [{"field": "type_of_admission", "op": "eq", "value": "Emergency"}],
+        "queries": [
+            {"id": "kpi", "dimensions": ["discharge_year"], "metrics": ["discharge_count"]},
+            {"id": "age", "dimensions": ["age_group"], "metrics": ["discharge_count"],
+             "sort": [{"field": "discharge_count", "order": "desc"}], "limit": 10},
+            {"id": "gender", "dimensions": ["gender"], "metrics": ["discharge_count"]},
+        ],
+    })
+    body = _body(resp)
+    assert resp.status_code == 200
+    assert body["code"] == 200
+    results = body["data"]["results"]
+    assert set(results) == {"kpi", "age", "gender"}
+    assert body["data"]["query_count"] == 3
+    # 与单查询 test_aggregation_with_filters 一致：Emergency 共 150 条
+    assert sum(r["discharge_count"] for r in results["gender"]["rows"]) == 150
+    assert results["age"]["rows"][0]["discharge_count"] > 0
+    assert results["kpi"]["row_count"] == 1
+
+
+def test_aggregation_batch_repeat_consistent(client):
+    """同一批次重复请求结果一致（测试环境缓存关闭，重点校验两次结果相同）。"""
+    payload = {
+        "queries": [
+            {"id": "age", "dimensions": ["age_group"], "metrics": ["discharge_count"]},
+        ],
+    }
+    first = _body(_post(client, "/api/v1/aggregations/batch", payload))
+    second = _body(_post(client, "/api/v1/aggregations/batch", payload))
+    assert set(second["data"]["results"]) == set(first["data"]["results"])
+    assert second["data"]["results"]["age"]["row_count"] == first["data"]["results"]["age"]["row_count"]
+
+
+def test_aggregation_batch_duplicate_id_400(client):
+    resp = _post(client, "/api/v1/aggregations/batch", {
+        "queries": [
+            {"id": "a", "dimensions": ["age_group"], "metrics": ["discharge_count"]},
+            {"id": "a", "dimensions": ["gender"], "metrics": ["discharge_count"]},
+        ],
+    })
+    assert resp.status_code == 400
+
+
+def test_aggregation_batch_invalid_query_400(client):
+    resp = _post(client, "/api/v1/aggregations/batch", {
+        "queries": [
+            {"id": "a", "dimensions": ["hacked_column"], "metrics": ["discharge_count"]},
+        ],
+    })
+    body = _body(resp)
+    assert resp.status_code == 400
+    assert body["code"] == 400
+
+
+def test_aggregation_batch_missing_queries_400(client):
+    resp = _post(client, "/api/v1/aggregations/batch", {"filters": []})
+    assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
 # 算法统一接口
 # ---------------------------------------------------------------------------
 def test_algorithm_run_statistics(client):

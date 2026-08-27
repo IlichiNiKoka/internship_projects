@@ -18,12 +18,8 @@
   * 模糊查询：基于子串匹配 + 长度容差（3.X.4 大数据模糊查询）；
   * 医疗术语联想：synonym 反向索引（3.X.4 医疗术语联想）。
 
-Phase 2 增强（已实现，见 llm_classifier.py）：
-  1. LLM 分类器：规则引擎不命中时回退到 LLM，天然处理拼写错误/口语表达；
-  2. 多意图识别：classify_multi() 使用 LLM 识别单次查询中的多个意图；
-  3. 闲聊/非业务查询：LLM prompt 指示返回 unsupported；
-  4. 医疗术语联想：LLM prompt 包含完整维度/指标词典。
-  待办（需额外基础设施）：BERT/Transformer 本地模型、置信度校准。
+注：LLM 增强分类器（llm_classifier.py）与多意图识别已移除——Agent 架构下
+意图理解直接委托给 LLM 工具规划，不再需要独立的 LLM 分类阶段。
 """
 from __future__ import annotations
 

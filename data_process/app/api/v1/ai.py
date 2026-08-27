@@ -46,6 +46,38 @@ def _service() -> AIService:
 
 
 # ---------------------------------------------------------------------------
+@bp.get("/provider")
+def provider_status():
+    """当前 LLM 提供方（online=DeepSeek API / local=本地 Ollama）。"""
+    from app.ai.provider import get_current_mode
+    from app.ai.summary.llm_client import describe_client
+
+    svc = _service()
+    mode = get_current_mode(ext.settings)
+    return success({
+        "mode": mode,
+        "llm": describe_client(svc._client, ext.settings),
+    })
+
+
+@bp.post("/provider")
+def switch_provider():
+    """热切换 LLM 提供方：{"mode": "online" | "local"}，无需重启进程。"""
+    from app.ai.provider import switch_llm_mode
+    from app.core.error_codes import ErrorCode
+    from app.core.exceptions import BizException
+
+    payload = request.get_json(silent=True) or {}
+    mode = str(payload.get("mode") or "").strip().lower()
+    if mode not in ("online", "local"):
+        raise BizException(ErrorCode.PARAM_VALIDATION_ERROR, "mode 必须是 online（在线API）或 local（本地模型）")
+    try:
+        llm_info = switch_llm_mode(mode, ext.settings)
+    except Exception as exc:  # noqa: BLE001 —— 配置不合法等场景返回 400 而非 500
+        raise BizException(ErrorCode.PARAM_VALIDATION_ERROR, f"LLM 切换失败: {exc}") from exc
+    return success({"mode": mode, "llm": llm_info})
+
+
 @bp.get("/health")
 def health():
     """AI 子系统健康检查。"""

@@ -81,6 +81,77 @@ def test_cache_hit(sample_df):
     assert cache.stats["hits"] == 1
 
 
+# ---------------------------------------------------------------------------
+# 批量聚合（大屏筛选联动优化）
+# ---------------------------------------------------------------------------
+def test_batch_shared_filters(sample_df):
+    """批次内所有子查询共享同一组过滤条件，结果与单查询一致。"""
+    svc = AggregationService(df=sample_df)
+    result = svc.run_batch(
+        filters=[{"field": "gender", "op": "eq", "value": "Male"}],
+        queries=[
+            {"id": "age", "dimensions": ["age_group"], "metrics": ["discharge_count"]},
+            {"id": "county", "dimensions": ["hospital_county"], "metrics": ["discharge_count"]},
+        ],
+    )
+    assert result["query_count"] == 2
+    results = result["results"]
+    # Male 共 300 行 -> 各维度分组求和均为 300
+    assert sum(r["discharge_count"] for r in results["age"]["rows"]) == 300
+    assert sum(r["discharge_count"] for r in results["county"]["rows"]) == 300
+    assert all(r["discharge_count"] == 60 for r in results["age"]["rows"])
+
+
+def test_batch_limit_and_sort(sample_df):
+    svc = AggregationService(df=sample_df)
+    result = svc.run_batch(
+        filters=[],
+        queries=[
+            {"id": "top", "dimensions": ["hospital_county"], "metrics": ["discharge_count"],
+             "sort": [{"field": "discharge_count", "order": "desc"}], "limit": 2},
+        ],
+    )
+    rows = result["results"]["top"]["rows"]
+    assert len(rows) == 2
+    assert rows[0]["discharge_count"] >= rows[1]["discharge_count"]
+
+
+def test_batch_cache_hit(sample_df):
+    """相同批次重复请求命中整批缓存（第二次不重算）。"""
+    cache = InMemoryTTLCache(max_entries=10, ttl_seconds=60)
+    svc = AggregationService(df=sample_df, cache=cache)
+    queries = [
+        {"id": "age", "dimensions": ["age_group"], "metrics": ["discharge_count"]},
+        {"id": "gender", "dimensions": ["gender"], "metrics": ["discharge_count"]},
+    ]
+    first = svc.run_batch(filters=[], queries=queries)
+    assert first["cached"] is False
+    second = svc.run_batch(filters=[], queries=queries)
+    assert second["cached"] is True
+    assert second["results"]["age"]["row_count"] == first["results"]["age"]["row_count"]
+
+
+def test_batch_duplicate_id(sample_df):
+    svc = AggregationService(df=sample_df)
+    with pytest.raises(InvalidFilterError):
+        svc.run_batch(
+            filters=[],
+            queries=[
+                {"id": "a", "dimensions": ["age_group"], "metrics": ["discharge_count"]},
+                {"id": "a", "dimensions": ["gender"], "metrics": ["discharge_count"]},
+            ],
+        )
+
+
+def test_batch_invalid_dimension(sample_df):
+    svc = AggregationService(df=sample_df)
+    with pytest.raises(InvalidDimensionError):
+        svc.run_batch(
+            filters=[],
+            queries=[{"id": "a", "dimensions": ["hack"], "metrics": ["discharge_count"]}],
+        )
+
+
 def test_invalid_dimension(service):
     with pytest.raises(InvalidDimensionError):
         service.run({"dimensions": ["not_a_dim"], "metrics": ["discharge_count"]})

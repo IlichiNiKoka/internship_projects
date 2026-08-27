@@ -101,6 +101,10 @@ class Settings:
     mysql_autostart: bool = True             # 后端启动时自动拉起 medical-mysql 容器
     hdfs_autostart: bool = True              # 后端启动时自动拉起 medical-hdfs 容器
     infra_compose_dir: str = ""              # compose 文件所在目录，留空用项目根 ../deploy
+    # 后端退出时是否停止全部接管的底座容器（run.py 统一启停；
+    # false 则容器常驻，生命周期交给 Docker restart 策略）。
+    infra_stop_on_exit: bool = True
+    infra_startup_wait: float = 180.0        # 等待容器端口就绪的最长秒数（首次导入可能较久）
 
     # ---- 超时与慢查询（二期 3.3.4 API 性能优化）----
     agg_timeout_seconds: float = 120.0     # 聚合计算超时阈值，<=0 表示不限制
@@ -123,7 +127,7 @@ class Settings:
     # ---- 启动预热 ----
     # 服务启动后在后台线程预加载 Spark 数据源（Parquet 快照 ~20s），
     # 让首个用户请求不必承担冷启动开销；testing 环境自动跳过。
-    warmup_on_startup: bool = True             # 单次查询最多组合维度数
+    warmup_on_startup: bool = True
 
     # ---- 机器学习 ----
     ml_sample_size: int = 100_000           # 费用预测训练样本上限（平衡精度与耗时）
@@ -149,6 +153,26 @@ class Settings:
     llm_max_tokens: int = 4000             # 文本生成最大 token（DeepSeek V4 Flash 需更大 token 防止思考内容被截断）
     # 意图识别：达标阈值（低于此值时分类器输出 unsupported）
     intent_min_confidence: float = 0.45
+
+    # ---- 本地 AI 模型自启（Ollama，见 run.py::_ensure_ollama）----
+    # provider=ollama 时，run.py 自动拉起本地 Ollama 服务并确保模型存在；
+    # 退出时只停止本进程拉起的 serve，原本已在运行的实例不受影响。
+    llm_autostart: bool = True             # 是否自动管理本地 Ollama 生命周期
+    ollama_bin: str = ""                   # ollama 可执行文件；留空按 PATH 查找
+    ollama_startup_wait: float = 90.0      # 等待 ollama serve 就绪的最长秒数
+    ollama_pull_on_missing: bool = True    # 配置的模型缺失时自动 ollama pull
+
+    # ---- 前端自启（Vue3 大屏，见 run.py::_ensure_frontend）----
+    # run.py 一键启动时是否自动拉起前端；退出时整树停止本进程拉起的 npm 进程。
+    # 端口已被占用（用户已自行启动前端）时自动跳过、不接管。
+    frontend_enabled: bool = True
+    frontend_mode: str = "dev"             # dev（vite dev server，热更新）/ preview（build+preview 预览）
+    frontend_dir: str = ""                 # 前端项目目录；留空按 run.py 推导 ../smart-medical-frontend
+    frontend_host: str = "127.0.0.1"       # 打印给用户的前端访问地址
+    frontend_port: int = 5173              # 前端端口（与 vite.config.ts 保持一致）
+    frontend_startup_wait: float = 120.0   # 等待前端就绪的最长秒数（首次 npm install 较久）
+    frontend_build_before_preview: bool = True   # preview 模式是否先执行 npm run build
+    frontend_auto_install: bool = True     # 依赖缺失时自动 npm install
 
     # ---- 日志 ----
     log_dir: Path = LOG_DIR_DEFAULT
