@@ -174,6 +174,13 @@ class Settings:
     frontend_build_before_preview: bool = True   # preview 模式是否先执行 npm run build
     frontend_auto_install: bool = True     # 依赖缺失时自动 npm install
 
+    # ---- 运行模式（方案A容器化，见 run.py::_ensure_app_via_compose）----
+    # host：宿主机直接运行 Flask（需本机 JDK/Spark 环境，默认，向后兼容）；
+    # container：由 run.py 编排 docker compose 拉起应用容器，宿主机零依赖。
+    run_mode: str = "host"
+    app_container: str = "medical-app"     # compose 中的应用服务名（容器化模式下接管）
+    app_startup_wait: float = 600.0        # 等待应用容器健康的最长秒数（首次构建较久）
+
     # ---- 日志 ----
     log_dir: Path = LOG_DIR_DEFAULT
     log_level: str = "INFO"

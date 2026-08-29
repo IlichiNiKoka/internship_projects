@@ -495,6 +495,54 @@ def _stop_frontend(handle) -> None:
 
 
 # ---------------------------------------------------------------------------
+# 分析服务应用：host 模式本地 Flask / container 模式 docker compose 拉起
+# ---------------------------------------------------------------------------
+def _ensure_app_via_compose(settings) -> str | None:
+    """容器化运行：docker compose 构建并拉起分析服务应用容器（含底座）。
+
+    方案A：宿主机零依赖（无需 JDK / Hadoop / winutils），应用镜像内
+    Linux 环境直接运行 PySpark。返回被接管的容器名（退出时随服务停止）；
+    失败返回 None（不阻塞前端启动）。
+    """
+    if not _compose_file(settings).exists():
+        print("  * 应用     : 未找到 deploy/docker-compose.yml，无法以 container 模式启动")
+        return None
+    if _docker("info").returncode != 0:
+        print("  * 应用     : Docker 不可用，无法以 container 模式启动"
+              "（可改用 run_mode=host，或手动执行 docker compose up -d）")
+        return None
+
+    container = str(getattr(settings, "app_container", "medical-app") or "medical-app")
+    print(f"  * 应用     : 正在构建并拉起 {container} 容器（首次构建约 5~10 分钟）...")
+    result = _docker("compose", "-f", str(_compose_file(settings)),
+                     "up", "-d", "--build", container)
+    if result.returncode != 0:
+        tail = (result.stderr or "").strip().splitlines()[-2:]
+        print(f"  * 应用     : docker compose up {container} 失败：{tail}")
+        return None
+
+    # 等待容器健康（首次启动需预热数据：Parquet 快照缺失时从 MySQL 全量加载）
+    deadline = time.time() + float(getattr(settings, "app_startup_wait", 600.0))
+    while time.time() < deadline:
+        status = _docker("inspect", "-f", "{{.State.Health.Status}}", container)
+        state = (status.stdout or "").strip()
+        if status.returncode == 0 and state == "healthy":
+            print(f"  * 应用     : 分析服务容器已就绪 http://127.0.0.1:{settings.port}")
+            return container
+        # 容器已退出（启动崩溃）则放弃等待并给出日志
+        running = _docker("inspect", "-f", "{{.State.Running}}", container)
+        if (running.stdout or "").strip() != "true":
+            logs = _docker("logs", "--tail", "40", container)
+            print(f"  * 应用     : 容器 {container} 未在运行，最近日志：\n"
+                  f"{(logs.stdout or logs.stderr or '').strip()[-2000:]}")
+            return None
+        time.sleep(5)
+    print(f"  * 应用     : 等待 {container} 健康超时（{settings.app_startup_wait:.0f}s），"
+          f"请查看: docker logs {container}")
+    return container
+
+
+# ---------------------------------------------------------------------------
 # 退出清理：Ollama + 全部接管容器（幂等，只执行一次）
 # ---------------------------------------------------------------------------
 def _register_exit_handlers(
@@ -504,6 +552,7 @@ def _register_exit_handlers(
     standalone_redis: str | None,
     ollama: dict,
     frontend: dict,
+    app_container: str | None = None,
 ) -> None:
     """统一注册退出清理。
 
@@ -515,6 +564,8 @@ def _register_exit_handlers(
     stop_names = list(dict.fromkeys(compose_managed))
     if standalone_redis and standalone_redis not in stop_names:
         stop_names.append(standalone_redis)
+    if app_container and app_container not in stop_names:
+        stop_names.append(app_container)
 
     state = {"done": False}
 
@@ -580,6 +631,12 @@ def main() -> None:
     # 3) 前端（Vue3 大屏：dev / preview 模式自动拉起，退出时整树停止）
     frontend = _ensure_frontend(settings)
 
+    # 3.5) 分析服务应用：host 模式本地 Flask；container 模式 docker compose 拉起容器
+    run_mode = str(getattr(settings, "run_mode", "host") or "host").strip().lower()
+    app_container: str | None = None
+    if run_mode == "container":
+        app_container = _ensure_app_via_compose(settings)
+
     # 4) 退出清理（Ctrl+C / 正常结束）
     _register_exit_handlers(
         settings,
@@ -587,7 +644,30 @@ def main() -> None:
         standalone_redis=standalone_redis,
         ollama=ollama,
         frontend=frontend,
+        app_container=app_container,
     )
+
+    # 容器化模式：应用由 docker compose 管理，本进程仅编排 + 阻塞等待退出
+    if run_mode == "container":
+        if app_container is None:
+            print("\n  [ERROR] 容器化模式启动失败，请检查上方日志（前端已独立拉起不受影响）")
+            return
+        print(f"\n  {settings.app_name} v{settings.version}（容器化模式）")
+        print(f"  * 分析服务 : http://{settings.host}:{settings.port}（docker 容器 {app_container}）")
+        print(f"  * 健康检查 : http://{settings.host}:{settings.port}/api/v1/health")
+        if frontend.get("url"):
+            lifecycle = ("随服务退出自动停止" if frontend.get("started")
+                         else "已有实例在运行/启动失败，退出不影响")
+            print(f"  * 前端     : {frontend['url']}（{frontend.get('mode')} 模式，{lifecycle}）")
+        print("  * 按 Ctrl+C 停止全部服务（含容器）\n")
+        try:
+            while True:
+                # 短睡循环：Windows 下主线程长 sleep 无法被 CTRL_BREAK 唤醒，
+                # 1s 分片让 Ctrl+C / Ctrl+Break 两种中断都能及时触发退出清理
+                time.sleep(1)
+        except KeyboardInterrupt:
+            pass
+        return
 
     app = create_app(settings)
     print(f"\n  {settings.app_name} v{settings.version}")

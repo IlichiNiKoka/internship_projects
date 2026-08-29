@@ -84,18 +84,27 @@ class OpenAICompatibleClient:
         # 额外请求体透传（如 {"reasoning_effort": "none"} 关闭远程推理模型思考链）
         self._extra_body = extra_body or None
         self._OpenAI_cls = OpenAI
+        # 懒加载单例客户端：OpenAI 对象 + httpx.Client 是连接池，
+        # 每次调用都重建会重复 TLS 握手与建连（数百 ms 级开销）。
+        self._client = None
+
+    def _get_client(self):
+        """懒加载并复用 OpenAI/httpx 客户端（线程安全：httpx.Client 支持并发复用）。"""
+        if self._client is None:
+            import httpx
+            # trust_env=False：忽略系统/环境代理（如 Windows 注册表代理）。
+            # 否则本机代理未运行时，连 localhost Ollama 也会被代理拦截报 Connection error。
+            self._client = self._OpenAI_cls(
+                api_key=self._api_key,
+                base_url=self._base_url,
+                timeout=self._timeout,
+                http_client=httpx.Client(trust_env=False, timeout=self._timeout),
+            )
+        return self._client
 
     def chat(self, system_prompt: str, user_prompt: str) -> str:
         """调用 chat completions API（空响应自动重试）。"""
-        # trust_env=False：忽略系统/环境代理（如 Windows 注册表代理）。
-        # 否则本机代理未运行时，连 localhost Ollama 也会被代理拦截报 Connection error。
-        import httpx
-        client = self._OpenAI_cls(
-            api_key=self._api_key,
-            base_url=self._base_url,
-            timeout=self._timeout,
-            http_client=httpx.Client(trust_env=False, timeout=self._timeout),
-        )
+        client = self._get_client()
         import time
         started = time.perf_counter()
         last_err: Exception | None = None

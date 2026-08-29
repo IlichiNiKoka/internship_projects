@@ -233,6 +233,100 @@ class TestSummaryGenerator:
         assert summary["api_key_configured"] is True
         assert summary["base_url"] == "https://api.deepseek.com/v1"
 
+    # ---- 2026-08-27 性能优化：Prompt 裁剪 / 摘要缓存 / 客户端复用 ----
+
+    def test_prompt_pruning_truncates_long_rows(self):
+        """超过 PROMPT_MAX_ROWS 的 rows 只注入前 N 行，且截断说明写进 Prompt。"""
+        from app.ai.summary.generator import PROMPT_MAX_ROWS
+        rows = [[f"group_{i}", float(i)] for i in range(PROMPT_MAX_ROWS + 20)]
+        pruned, truncated = self.gen._prune_for_prompt({"rows": rows})
+        assert truncated == len(rows)
+        assert len(pruned["rows"]) == PROMPT_MAX_ROWS
+
+        class CapturingClient:
+            provider = "capture"
+            def __init__(self):
+                self.user_prompt = ""
+            def chat(self, system_prompt, user_prompt):
+                self.user_prompt = user_prompt
+                return "摘要"
+
+        client = CapturingClient()
+        gen = SummaryGenerator(client)
+        gen.generate("按年龄段统计", "多维度聚合查询",
+                     "aggregation_query", {"rows": rows})
+        # 截断说明进入实际发给 LLM 的 user_prompt
+        assert f"共 {len(rows)} 行" in client.user_prompt
+        assert f"前 {PROMPT_MAX_ROWS} 行" in client.user_prompt
+        # 注入的 JSON 只有前 N 行
+        assert f'"group_{PROMPT_MAX_ROWS}"' not in client.user_prompt
+
+    def test_prompt_pruning_rounds_floats(self):
+        """浮点压缩：Prompt 中的数字保留 4 位小数。"""
+        pruned, _ = self.gen._prune_for_prompt({"avg": 4.32456789})
+        assert pruned["avg"] == 4.3246
+
+    def test_summary_cache_hits_skip_llm(self):
+        """相同意图+提问+结果命中摘要缓存，第二次不再调用 LLM。"""
+        from app.core.cache import InMemoryTTLCache
+
+        class CountingClient:
+            provider = "counting"
+            def __init__(self):
+                self.calls = 0
+            def chat(self, system_prompt, user_prompt):
+                self.calls += 1
+                return "第一次生成的摘要"
+
+        client = CountingClient()
+        gen = SummaryGenerator(client, cache=InMemoryTTLCache(max_entries=16),
+                               cache_ttl_seconds=60)
+        data = {"rows": [["0 to 17", 12345]], "dimensions": ["age_group"]}
+        r1 = gen.generate("按年龄段统计", "多维度聚合查询",
+                          "aggregation_query", data)
+        r2 = gen.generate("按年龄段统计", "多维度聚合查询",
+                          "aggregation_query", data)
+        assert client.calls == 1, f"期望只调用 1 次 LLM，实际 {client.calls}"
+        assert r1.text == r2.text == "第一次生成的摘要"
+
+    def test_summary_cache_key_differs_by_result_and_query(self):
+        """结果不同或提问不同，缓存 key 不同（不误命中）。"""
+        from app.core.cache import InMemoryTTLCache
+
+        class CountingClient:
+            provider = "counting"
+            def __init__(self):
+                self.calls = 0
+            def chat(self, system_prompt, user_prompt):
+                self.calls += 1
+                return f"摘要{counter()}"
+
+        def counter():
+            return CountingClient.calls
+
+        client = CountingClient()
+        gen = SummaryGenerator(client, cache=InMemoryTTLCache(max_entries=16))
+        data1 = {"rows": [["0 to 17", 12345]], "dimensions": ["age_group"]}
+        data2 = {"rows": [["0 to 17", 99999]], "dimensions": ["age_group"]}
+        gen.generate("按年龄段统计", "多维度聚合查询", "aggregation_query", data1)
+        gen.generate("按年龄段统计", "多维度聚合查询", "aggregation_query", data1)
+        gen.generate("换个问法", "多维度聚合查询", "aggregation_query", data1)
+        gen.generate("按年龄段统计", "多维度聚合查询", "aggregation_query", data2)
+        assert client.calls == 3, f"期望 3 次 LLM 调用，实际 {client.calls}"
+
+    def test_llm_client_reused_across_chat_calls(self):
+        """OpenAI 兼容客户端懒加载单例：多次 chat 复用同一个底层客户端。"""
+        from app.ai.summary.llm_client import OpenAICompatibleClient
+        client = OpenAICompatibleClient(
+            api_key="sk-test", model="deepseek-chat",
+            base_url="https://api.deepseek.com/v1",
+        )
+        # 首次调用前不建连
+        assert client._client is None
+        c1 = client._get_client()
+        c2 = client._get_client()
+        assert c1 is c2, "底层客户端应被复用（连接池复用，避免重复 TLS 握手）"
+
 
 # ===========================================================================
 # 4. AI 服务编排（单元层，注入 Mock 客户端）

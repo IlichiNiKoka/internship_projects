@@ -1,18 +1,19 @@
 # =============================================================
-# 智慧医疗大数据平台 · 基础设施容器编排（MySQL / HDFS / Redis）
+# 智慧医疗大数据平台 · 基础设施容器编排（MySQL / HDFS / Redis / 分析服务）
 #
 # 用法（在 deploy/ 目录下执行）：
-#   docker compose up -d              # 启动全部三个服务
+#   docker compose up -d              # 启动全部四个服务（含分析服务应用）
 #   docker compose up -d medical-mysql    # 只启动某个服务
 #   docker compose down               # 停止并移除容器（数据卷保留，不丢数据）
 #   docker compose ps                 # 查看状态
-#   docker compose logs -f medical-hdfs
+#   docker compose logs -f medical-app    # 查看应用日志
 #
 # 数据持久化：
 #   * MySQL 数据 -> 具名卷 medical-mysql-data（首次启动自动导入
 #     mysql-init/*.sql.gz 初始化数据）
 #   * HDFS 数据  -> 具名卷 medical-hdfs-namenode / medical-hdfs-datanode
 #   * Redis      -> 无持久化（缓存可随时重建）
+#   * 应用       -> 日志 / Parquet 快照 / ivy 依赖缓存具名卷
 #
 # 注意：宿主机 3306 端口若被本机原生 MySQL 服务占用，需先停掉
 #       （net stop MySQL80），否则容器端口映射失败。
@@ -88,7 +89,61 @@ services:
       timeout: 3s
       retries: 5
 
+  # ---- 分析服务应用（Flask + PySpark，方案A容器化）----
+  # 宿主机零依赖：JDK / Hadoop / winutils 全部打包在镜像内（Linux 无需 winutils）。
+  # 与 mysql/hdfs/redis 通过 compose 网络内网直连（environment 覆盖 .env 的宿主机地址）。
+  medical-app:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: medical-app:1.0.0
+    container_name: medical-app
+    hostname: medical-app
+    restart: unless-stopped
+    depends_on:
+      medical-mysql:
+        condition: service_healthy
+      medical-redis:
+        condition: service_healthy
+      medical-hdfs:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:5000:5000"
+    environment:
+      # 容器内网地址优先（compose environment 覆盖 env_file 同名字段）
+      ANALYTICS_DB_HOST: medical-mysql
+      ANALYTICS_DB_PORT: "3306"
+      ANALYTICS_REDIS_HOST: medical-redis
+      ANALYTICS_REDIS_PORT: "6379"
+      # HDFS DataNode 容器内 hostname 为 namenode，客户端直连内网
+      ANALYTICS_HDFS_NAMENODE: hdfs://namenode:8020
+      ANALYTICS_DATA_SOURCE: mysql
+      # 覆盖 .env 中的 Windows 宿主机路径/环境（Linux 容器内专用值）
+      ANALYTICS_SPARK_JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
+      ANALYTICS_SPARK_HADOOP_HOME: ""
+      ANALYTICS_DATA_PARQUET_PATH: /app/processed/sparcs_snapshot.parquet
+      ANALYTICS_LOG_DIR: /app/logs
+      ANALYTICS_HOST: 0.0.0.0
+      ANALYTICS_PORT: "5000"
+    env_file:
+      # 复用宿主机 .env（密码/API Key 等敏感项），容器专属覆盖见上 environment
+      - ../data_process/.env
+    volumes:
+      # 日志 / Parquet 快照 / ivy 依赖缓存：重建容器不丢
+      - medical-app-logs:/app/logs
+      - medical-app-processed:/app/processed
+      - medical-ivy:/root/.ivy2
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://127.0.0.1:5000/api/v1/health',timeout=3)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 90s
+
 volumes:
   medical-mysql-data:
   medical-hdfs-namenode:
   medical-hdfs-datanode:
+  medical-app-logs:
+  medical-app-processed:
+  medical-ivy:

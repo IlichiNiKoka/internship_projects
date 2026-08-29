@@ -546,6 +546,79 @@ class ReportNumericConsistencyTests(unittest.TestCase):
         self.assertNotIn("45,678", report["executive_summary"])
         self.assertNotIn("45678", report["executive_summary"])
 
+    # ---- 2026-08-27 修复：消除合法摘要的误报（单位/舍入/占比推导）----
+
+    def test_percent_fraction_unit_equivalence_is_trusted(self):
+        """源存小数(0.146)，文本写百分号(14.6%)，视为一致。"""
+        from app.ai.summary.hallucination import check as numeric_check
+        report = numeric_check(
+            {"mode": "profile", "high_risk_rate": 0.146,
+             "level_distribution": [
+                 {"level": "High", "count": 1200, "ratio": 0.146},
+                 {"level": "Low", "count": 7014, "ratio": 0.854}]},
+            "高风险人群比例为 14.6%，其中 70 岁及以上占比最大。",
+        )
+        self.assertTrue(report.passed, report.unmatched)
+
+    def test_two_decimal_rounding_of_small_fraction_is_trusted(self):
+        """源存 0.146（4 位小数），文本四舍五入为 0.15（保留 2 位）。"""
+        from app.ai.summary.hallucination import check as numeric_check
+        report = numeric_check(
+            {"high_risk_rate": 0.146},
+            "高风险人群比例约 0.15。",
+        )
+        self.assertTrue(report.passed, report.unmatched)
+
+    def test_derived_percentage_of_distribution_is_trusted(self):
+        """LLM 从 rows 人次推导占比（656100/合计=31.2%），应视为一致。"""
+        from app.ai.summary.hallucination import check as numeric_check
+        rows = [
+            {"age_group": "0-17", "discharge_count": 86137},
+            {"age_group": "18-29", "discharge_count": 233077},
+            {"age_group": "30-49", "discharge_count": 500000},
+            {"age_group": "50-69", "discharge_count": 626274},
+            {"age_group": "70 or Older", "discharge_count": 656100},
+        ]
+        report = numeric_check(
+            {"rows": rows, "row_count": 5},
+            "70 岁及以上占比最高（约 31.2%），共 656,100 人次，其次 50-69 岁（29.8%）。",
+        )
+        self.assertTrue(report.passed, report.unmatched)
+
+    def test_fabricated_percentage_is_still_rejected(self):
+        """编造的占比（88.8%）不可由 rows 推导，仍须拦截。"""
+        from app.ai.summary.hallucination import check as numeric_check
+        rows = [
+            {"age_group": "0-17", "discharge_count": 86137},
+            {"age_group": "18-29", "discharge_count": 233077},
+            {"age_group": "30-49", "discharge_count": 500000},
+            {"age_group": "50-69", "discharge_count": 626274},
+            {"age_group": "70 or Older", "discharge_count": 656100},
+        ]
+        report = numeric_check(
+            {"rows": rows, "row_count": 5},
+            "70 岁及以上占比最高（约 88.8%）。",
+        )
+        self.assertFalse(report.passed)
+        self.assertTrue(any(abs(n - 88.8) < 0.01 for n in report.unmatched))
+
+    def test_report_level_integration_with_percent_text(self):
+        """报告级集成：百分比/占比文本的摘要应被纳入可信结论。"""
+        data = {
+            "mode": "profile", "high_risk_rate": 0.25,
+            "level_distribution": [
+                {"level": "High", "count": 250, "ratio": 0.25},
+                {"level": "Low", "count": 750, "ratio": 0.75}],
+        }
+        service = MedicalReportService(_StaticSummaryGenerator(
+            "高风险人群比例约 25%，低风险人群占比 75%。"
+        ))
+        report = service.generate(session_id="ses_x", analyses=[self._record(data)])
+        section = report["sections"][0]
+        self.assertTrue(section["summary_validation"]["trusted"])
+        self.assertTrue(section["summary_validation"]["hallucination"]["passed"])
+        self.assertTrue(report["validation"]["all_summaries_trusted"])
+
 
 if __name__ == "__main__":
     unittest.main()

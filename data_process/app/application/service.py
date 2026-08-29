@@ -1202,7 +1202,11 @@ def build_application_service(settings, *, data_provider, cache, redis_client=No
         ),
     )
     llm_client = build_client(settings)
-    summary_generator = SummaryGenerator(llm_client)
+    summary_generator = SummaryGenerator(
+        llm_client,
+        cache=cache,
+        cache_ttl_seconds=int(getattr(settings, "summary_cache_ttl_seconds", 1800)),
+    )
     store = build_session_store(settings, redis_client=redis_client)
     report_service = MedicalReportService(
         summary_generator,

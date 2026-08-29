@@ -17,6 +17,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from dataclasses import dataclass, field
@@ -31,6 +32,14 @@ from app.ai.summary.prompts import (
 )
 
 logger = logging.getLogger(__name__)
+
+# 注入 Prompt 的结构化结果上限：rows 类列表只保留前 N 行（数据已按指标
+# 降序排序，LLM 只需要头部趋势即可作答），并将截断信息附在 Prompt 中。
+PROMPT_MAX_ROWS = 50
+# 浮点压缩精度：Prompt 中的数字统一保留 4 位小数，减少 token 数。
+PROMPT_FLOAT_DIGITS = 4
+# 摘要缓存 TTL（秒）：相同 意图+提问+分析结果 不再重复调用 LLM。
+SUMMARY_CACHE_TTL = 1800
 
 
 @dataclass
@@ -72,8 +81,14 @@ class SummaryGenerator:
         result = generator.generate(query, intent_label, analysis_result)
     """
 
-    def __init__(self, client: LLMClient):
+    def __init__(self, client: LLMClient, cache=None,
+                 cache_ttl_seconds: int = SUMMARY_CACHE_TTL):
         self._client = client
+        # 摘要缓存（可选）：复用核心缓存后端（InMemoryTTLCache / RedisCacheBackend），
+        # key 前缀 summary: 与聚合缓存隔离。相同「意图+提问+分析结果」直接命中，
+        # 跳过 LLM 往返（演示/追问场景收益最大）。
+        self._cache = cache
+        self._cache_ttl = max(1, int(cache_ttl_seconds))
 
     def generate(self, user_query: str, intent_label: str,
                  intent_key: str, analysis_result: Any) -> SummaryResult:
@@ -87,9 +102,34 @@ class SummaryGenerator:
                 hallucination=dict(PROMPT_ONLY_REPORT),
             )
 
-        analysis_json = json.dumps(analysis_result, ensure_ascii=False, default=str)
+        # ---- 1.5 Prompt 数据裁剪 + 摘要缓存 ----
+        pruned, truncated_rows = self._prune_for_prompt(analysis_result)
+        analysis_json = json.dumps(pruned, ensure_ascii=False, default=str)
         user_prompt = build_user_prompt(user_query, intent_label,
-                                        analysis_result, analysis_json)
+                                        pruned, analysis_json)
+        if truncated_rows:
+            user_prompt += (
+                f"\n【说明】原始分析结果共 {truncated_rows} 行，为控制长度仅注入"
+                f"前 {PROMPT_MAX_ROWS} 行；请基于已注入数据客观作答，"
+                "不得编造被截断部分的具体数值。"
+            )
+
+        cache_key = None
+        if self._cache is not None:
+            digest = hashlib.sha1(
+                f"{intent_key}\n{user_query}\n{analysis_json}".encode("utf-8")
+            ).hexdigest()
+            cache_key = f"summary:{digest}"
+            cached = self._cache.get(cache_key)
+            if isinstance(cached, dict) and cached.get("text"):
+                logger.info("摘要命中缓存 key=%s", cache_key)
+                return SummaryResult(
+                    text=cached["text"],
+                    llm_provider=cached.get("llm_provider", self._client.provider),
+                    fell_back_to_mock=bool(cached.get("fell_back_to_mock")),
+                    hallucination=dict(cached.get("hallucination")
+                                       or PROMPT_ONLY_REPORT),
+                )
 
         # ---- 2. 调用 LLM ----
         fell_back = False
@@ -100,18 +140,58 @@ class SummaryGenerator:
             llm_text = ""
             fell_back = True
 
-        # ---- 3. Mock 兜底渲染 ----
+        # ---- 3. Mock 兜底渲染（用完整结果，保证模板参数齐全）----
         if not llm_text or llm_text.startswith("__MOCK__"):
             fell_back = True
             llm_text = self._mock_render(intent_key, analysis_result)
 
-        # ---- 4. 直接返回（不再做幻觉后置校验，防幻觉由 prompts 强约束保证）----
-        return SummaryResult(
+        result = SummaryResult(
             text=llm_text,
             llm_provider=self._client.provider,
             fell_back_to_mock=fell_back,
             hallucination=dict(PROMPT_ONLY_REPORT),
         )
+
+        # ---- 4. 写摘要缓存 ----------------
+        # 只缓存真实 LLM 结果：Mock 兜底是 LLM 失败/超时时的降级产物，
+        # 若一并缓存（默认 TTL 30 分钟），一次瞬时超时会让后续所有相同
+        # 提问都返回模板文本，表现为「分析失效」。兜底不缓存，下次重试。
+        if cache_key is not None and not fell_back:
+            try:
+                self._cache.set(cache_key, result.to_dict(), self._cache_ttl)
+            except Exception as e:  # noqa: BLE001 —— 缓存写入失败不影响主流程
+                logger.warning("摘要缓存写入失败 key=%s err=%s", cache_key, e)
+        return result
+
+    # ------------------------------------------------------------------
+    def _prune_for_prompt(self, value: Any) -> tuple[Any, int | None]:
+        """裁剪注入 Prompt 的结构化结果。
+
+        返回 (裁剪后的值, 被截断的原始行数或 None)：
+          * 浮点数压缩到 4 位小数（减少 token，同时保留精度避免误导）；
+          * 长度超过 PROMPT_MAX_ROWS 的列表截断到前 N 行；
+          * 递归作用于 dict/list，rows 等行式数据同样生效。
+        """
+        if value is None or isinstance(value, (bool, int, str)):
+            return value, None
+        if isinstance(value, float):
+            return round(value, PROMPT_FLOAT_DIGITS), None
+        if isinstance(value, dict):
+            out: dict[str, Any] = {}
+            truncated: int | None = None
+            for k, v in value.items():
+                pv, pt = self._prune_for_prompt(v)
+                out[k] = pv
+                if pt is not None:
+                    truncated = pt
+            return out, truncated
+        if isinstance(value, (list, tuple)):
+            items = list(value)
+            if len(items) > PROMPT_MAX_ROWS:
+                return [self._prune_for_prompt(v)[0] for v in items[:PROMPT_MAX_ROWS]], \
+                    len(items)
+            return [self._prune_for_prompt(v)[0] for v in items], None
+        return value, None
 
     # ------------------------------------------------------------------
     def _mock_render(self, intent_key: str, analysis_result: Any) -> str:
